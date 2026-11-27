@@ -34,19 +34,30 @@ The **MAP** button in the Armory picks a map, or AUTO to change map every level.
 
 The **WEAPON** button in the Armory sets the starting weapon. Weapon crates on the road switch the whole squad's weapon for the rest of the level. The squad leader always carries the minigun.
 
-### Power-up crates
+### Power-ups
 
-Shoot a crate until its number reaches zero to open it.
+Power-ups come two ways. **Crates** stand on the road: shoot one until its number reaches zero to open it. **Power tokens** are glowing discs spinning under a beam of light just before a horde: steer the squad through one to take it. Running power-ups show as icons under the progress bar, each in a ring that drains as its time runs out and blinks just before it ends. They stack, and taking one again restarts its timer. Each power-up first appears on the level shown, and the first time you take one a banner explains it.
 
-| Crate | Effect |
-| --- | --- |
-| Rapid | Fire rate ×2.4 for 8 seconds |
-| Spread | Every shot fires three bullets for 8 seconds |
-| Shotgun / Rockets / Flamer | Switch the squad to that weapon |
-| Shield | Zombies die on contact instead of taking soldiers, 7 seconds |
-| Freeze | Zombies slow to a crawl for 6 seconds |
-| Airstrike | A line of explosions sweeps the road ahead |
-| + Men | Instant reinforcements |
+| Power-up | From level | Comes on | Effect |
+| --- | --- | --- | --- |
+| Rapid Fire | 1 | token, crate | Fire rate ×2.4 for 8 seconds, orange-hot tracers |
+| Spread Shot | 1 | crate | Every shot fires three bullets for 8 seconds |
+| Shield | 1 | token, crate | Zombies die on contact instead of taking soldiers, 7 seconds |
+| Reinforcements | 1 | crate | Instant extra soldiers |
+| Shotgun / Rockets / Flamer | 1 | crate | Switch the squad to that weapon |
+| Hollow Points | 2 | token, crate | Double damage for 7 seconds, bigger red tracers |
+| Airstrike | 2 | crate | A line of explosions sweeps the road ahead |
+| Freeze | 3 | crate | Zombies slow to a crawl for 6 seconds |
+| Adrenaline | 3 | token | Charge 1.6 times as fast and steer quicker for 5 seconds, with speed lines |
+| Salvage Magnet | 4 | token | Crates up to 25 m ahead break open by themselves for 6 seconds |
+| Gate Boost | 5 | token | The next blue gate counts twice (`+10` gives 20, `×2` becomes `×3`); gates ahead get a gold rim |
+| Sentry Gun | 6 | crate | An auto-turret rolls beside the squad for 9 seconds and fires at the biggest zombie in range |
+
+### Fighting the horde
+
+- The squad marches at a steadier pace, and **holds its ground** when a brute gets within a few metres, fighting it out before moving on. A "HOLD!" call shows the first time.
+- **Brutes draw the fire.** When a brute is in range, the squad leader and about two thirds of the squad aim at it; the rest keep shooting the nearest walkers.
+- Soldiers lost show as a red count rising over the squad.
 
 ### Armory upgrades
 

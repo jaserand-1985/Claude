@@ -32,9 +32,13 @@ canvas{display:block;width:100%;height:100%}
 .coin{width:16px;height:16px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#fff4c0,#ffc531 55%,#a87600);box-shadow:inset 0 0 0 2px #7a5500;flex:none}
 .iconbtn{pointer-events:auto;width:38px;height:38px;border-radius:8px;border:2px solid rgba(255,255,255,.3);background:rgba(0,0,0,.5);color:var(--ink);
   font:800 15px var(--body);display:grid;place-items:center;cursor:pointer;flex:none}
-.chips{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;min-height:0}
+.chips{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;align-items:center;min-height:0}
 .chip{font-family:var(--display);font-size:11px;padding:5px 9px 8px;border-radius:6px;background:rgba(0,0,0,.6);border:2px solid var(--c);color:var(--c);position:relative;overflow:hidden}
 .chip i{position:absolute;left:0;bottom:0;height:3px;background:var(--c)}
+.pwr{width:38px;height:38px;border-radius:50%;padding:3px;background:conic-gradient(var(--c) var(--p,100%),rgba(0,0,0,.55) 0);box-shadow:0 2px 6px rgba(0,0,0,.5);position:relative}
+.pwr img{width:100%;height:100%;border-radius:50%;background:rgba(10,12,18,.88);display:block;padding:4px;box-sizing:border-box}
+.pwr.end{animation:pwrblink .25s steps(2) infinite}
+@keyframes pwrblink{50%{opacity:.35}}
 .bossbar{display:flex;flex-direction:column;gap:3px;align-items:stretch;max-width:420px;width:100%;align-self:center}
 .bossbar span{font-family:var(--display);font-size:12px;color:#ffd0c8;text-align:center;letter-spacing:.06em;text-shadow:0 2px 0 #000}
 .bossbar div{height:12px;border-radius:7px;background:rgba(0,0,0,.6);border:2px solid #fff;overflow:hidden}
@@ -167,7 +171,7 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('deadtide2.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem('deadtide2.' + k, JSON.stringify(v)); } catch (e) {} }
 };
-const save = { weapon: store.get('weapon', 'rifle'), map: store.get('map', 'auto'), level: store.get('level', 1), coins: store.get('coins', 0), up: Object.assign({ dmg: 0, rate: 0, men: 0, coin: 0 }, store.get('up', {})) };
+const save = { seen: store.get('seen', []), weapon: store.get('weapon', 'rifle'), map: store.get('map', 'auto'), level: store.get('level', 1), coins: store.get('coins', 0), up: Object.assign({ dmg: 0, rate: 0, men: 0, coin: 0 }, store.get('up', {})) };
 function persist() { store.set('weapon', save.weapon); store.set('map', save.map); store.set('level', save.level); store.set('coins', save.coins); store.set('up', save.up); }
 
 /* ================= audio: recorded CC0 samples (see audio/CREDITS.md) ================= */
@@ -247,7 +251,7 @@ function flameLoop(on) { // looping roar while the flamethrowers are going
   flameNode.g.gain.setTargetAtTime(on && soundOn ? .42 : 0, AC.currentTime, on ? .04 : .15);
   if (on) flameNode.bp.frequency.setTargetAtTime(rand(420, 680), AC.currentTime, .05);
 }
-let gunT = 0, miniT = 0, moanT = 1, splatT = 0, popT = 0, launchT = 0;
+let sentT = 0, gunT = 0, miniT = 0, moanT = 1, splatT = 0, popT = 0, launchT = 0;
 const sfx = {
   gun(n, hero, dt) { // squad volleys are thinned into a believable rattle; the hero's minigun is its own stream
     if (!AC) return;
@@ -280,7 +284,21 @@ const sfx = {
   },
   good() { chime([660, 880, 1320], .06, 'triangle', .08); },
   bad() { chime([392, 311, 233], .08, 'sawtooth', .05); },
-  power() { play('reload', { vol: .5, rev: .1 }); chime([523, 659, 784, 1046, 1318], .05, 'square', .035); },
+  power(type) {
+    play('reload', { vol: .5, rev: .1 });
+    if (type === 'shield') chime([784, 988, 1175, 1568], .03, 'sine', .07);
+    else if (type === 'freeze') chime([2093, 1760, 1397, 1175, 988], .035, 'sine', .05);
+    else if (type === 'power') { thump(60, .5, .6); chime([262, 392], .08, 'sawtooth', .04); }
+    else if (type === 'sprint') { noiseHit(.08, .4, 4000, 'highpass', .7); chime([440, 660, 880, 1320], .03, 'square', .03); }
+    else if (type === 'magnet') chime([330, 349, 330, 349, 392], .04, 'triangle', .05);
+    else if (type === 'double') chime([1046, 1318, 1568, 2093], .045, 'triangle', .07);
+    else if (type === 'turret') { thump(110, .2, .35); play('pump', { vol: .5, rev: .1, delay: .1 }); }
+    else chime([523, 659, 784, 1046, 1318], .05, 'square', .035);
+  },
+  token() { chime([880, 1320, 1760], .04, 'triangle', .07); noiseHit(.2, .12, 6000, 'highpass', .6, { rev: .3 }); },
+  expire() { chime([1318, 880], .06, 'sine', .05); },
+  boost() { chime([784, 1046, 1318, 1568, 2093], .04, 'triangle', .08); },
+  sentry() { if (!AC || AC.currentTime < sentT) return; sentT = AC.currentTime + .11; play('minigun', { vol: .2, rate: 1.25, pan: .35, rev: .1, hp: 200 }); },
   crate() { noiseHit(.25, .3, 1500, 'bandpass', .8, { rev: .2 }); noiseHit(.12, .25, 3500, 'highpass', .5); thump(140, .15, .25); },
   hurt() { noiseHit(.12, .14, 700, 'bandpass', 1.2); thump(80, .14, .2); },
   roar() { play('groan', { vol: .9, rate: .55, rev: .55, lp: 2200 }); play('moan', { vol: .6, rate: .5, rev: .5, lp: 1800, delay: .08 }); thump(40, 1.1, .5); },
@@ -845,9 +863,19 @@ const MAXB = 560;
 const rocketMesh = (() => { const body = new THREE.CylinderGeometry(.05, .05, .34, 8).rotateX(Math.PI / 2), nose = new THREE.ConeGeometry(.05, .14, 8).rotateX(-Math.PI / 2).translate(0, 0, -.24), fins = new THREE.BoxGeometry(.18, .02, .08).translate(0, 0, .15), fins2 = new THREE.BoxGeometry(.02, .18, .08).translate(0, 0, .15);
   const m = new THREE.InstancedMesh(mergeGeos([body, nose, fins, fins2]), new THREE.MeshStandardMaterial({ color: '#59633b', roughness: .5, metalness: .3 }), 70); m.count = 0; m.frustumCulled = false; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); scene.add(m); return m; })();
 const tracerMesh = inst(new THREE.BoxGeometry(.07, .07, 1), new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: .95, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }), MAXB, false, true);
-const TR_BULLET = new THREE.Color(2.4, 1.7, .6), TR_ROCKET = new THREE.Color(3.2, 1.1, .3), TR_HERO = new THREE.Color(3, 2.6, 1.4);
+const TR_RAPID = new THREE.Color(3.2, 1.2, .25), TR_POWER = new THREE.Color(3.4, .45, .35), TR_BULLET = new THREE.Color(2.4, 1.7, .6), TR_ROCKET = new THREE.Color(3.2, 1.1, .3), TR_HERO = new THREE.Color(3, 2.6, 1.4);
 const shieldMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 28, 16, 0, TAU, 0, Math.PI / 2), new THREE.MeshBasicMaterial({ color: '#4fc3ff', transparent: true, opacity: .2, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, toneMapped: false }));
 shieldMesh.visible = false; scene.add(shieldMesh);
+// the sentry gun: a tripod turret that rolls along beside the squad
+const turretGrp = new THREE.Group(); let turretPop = 0;
+{ const dark = new THREE.MeshStandardMaterial({ color: '#2b3a2b', metalness: .6, roughness: .45 }), steel = new THREE.MeshStandardMaterial({ color: '#59605a', metalness: .8, roughness: .3 }),
+    glow = new THREE.MeshBasicMaterial({ color: '#9dff6a', toneMapped: false });
+  for (let i = 0; i < 3; i++) { const a = i * TAU / 3, leg = new THREE.Mesh(new THREE.CylinderGeometry(.04, .05, .9, 6), steel); leg.position.set(Math.sin(a) * .3, .38, Math.cos(a) * .3); leg.rotation.set(Math.cos(a) * .55, 0, -Math.sin(a) * .55); turretGrp.add(leg); }
+  const head = new THREE.Group(); head.position.y = .82; turretGrp.add(head);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(.42, .3, .55), dark); body.castShadow = true; head.add(body);
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(.05, .06, .75, 8).rotateX(Math.PI / 2), steel); barrel.position.set(0, .04, -.6); head.add(barrel);
+  const lamp = new THREE.Mesh(new THREE.BoxGeometry(.1, .06, .02), glow); lamp.position.set(0, .1, -.28); head.add(lamp);
+  turretGrp.visible = false; scene.add(turretGrp); }
 
 function explosion(x, y, z, r, big = false) {
   const k = big ? 1 : .45; // scale
@@ -1176,13 +1204,19 @@ function banner(txt, sub = '', ms = 1500, color = '') {
 }
 
 /* ================= gates & crates ================= */
+// unlock: first level it can appear on; token: can come on a power token (run through it), crate: can come in a crate (shoot it open)
 const POWER = {
-  rapid:   { label: 'RAPID FIRE', short: 'RAPID', col: '#ff9a2e', dur: 8 },
-  spread:  { label: 'SPREAD SHOT', short: 'SPREAD', col: '#ffd23f', dur: 8 },
-  shield:  { label: 'SHIELD', short: 'SHIELD', col: '#4fc3ff', dur: 7 },
-  freeze:  { label: 'FREEZE', short: 'FREEZE', col: '#a9ecff', dur: 6 },
-  strike:  { label: 'AIRSTRIKE', short: 'AIRSTRIKE', col: '#c49bff', dur: 0 },
-  recruit: { label: 'REINFORCEMENTS', short: '+ MEN', col: '#5ee07a', dur: 0 },
+  rapid:   { label: 'RAPID FIRE', short: 'RAPID', col: '#ff9a2e', dur: 8, unlock: 1, token: 1, crate: 1, hint: 'FIRE RATE x2.4' },
+  spread:  { label: 'SPREAD SHOT', short: 'SPREAD', col: '#ffd23f', dur: 8, unlock: 1, crate: 1, hint: 'THREE BULLETS PER SHOT' },
+  shield:  { label: 'SHIELD', short: 'SHIELD', col: '#4fc3ff', dur: 7, unlock: 1, token: 1, crate: 1, hint: 'ZOMBIES DIE ON CONTACT' },
+  freeze:  { label: 'FREEZE', short: 'FREEZE', col: '#a9ecff', dur: 6, unlock: 3, crate: 1, hint: 'THE HORDE SLOWS TO A CRAWL' },
+  strike:  { label: 'AIRSTRIKE', short: 'AIRSTRIKE', col: '#c49bff', dur: 0, unlock: 2, crate: 1, hint: 'BOMBS SWEEP THE ROAD AHEAD' },
+  recruit: { label: 'REINFORCEMENTS', short: '+ MEN', col: '#5ee07a', dur: 0, unlock: 1, crate: 1, hint: 'FRESH SOLDIERS JOIN THE SQUAD' },
+  power:   { label: 'HOLLOW POINTS', short: 'DMG x2', col: '#ff4d4d', dur: 7, unlock: 2, token: 1, crate: 1, hint: 'DOUBLE DAMAGE' },
+  sprint:  { label: 'ADRENALINE', short: 'SPRINT', col: '#f4f1e8', dur: 5, unlock: 3, token: 1, hint: 'CHARGE FASTER, STEER QUICKER' },
+  magnet:  { label: 'SALVAGE MAGNET', short: 'MAGNET', col: '#ff6fb1', dur: 6, unlock: 4, token: 1, hint: 'CRATES AHEAD BREAK OPEN BY THEMSELVES' },
+  double:  { label: 'GATE BOOST', short: 'GATE x2', col: '#ffc531', dur: 15, unlock: 5, token: 1, hint: 'YOUR NEXT BLUE GATE COUNTS TWICE' },
+  turret:  { label: 'SENTRY GUN', short: 'SENTRY', col: '#9dff6a', dur: 9, unlock: 6, crate: 1, hint: 'AN AUTO-TURRET FIGHTS BESIDE YOU' },
   w_shotgun: { label: 'SHOTGUNS', short: 'SHOTGUN', col: '#ffb15a', dur: 0 },
   w_rocket:  { label: 'ROCKET LAUNCHERS', short: 'ROCKETS', col: '#ff5a3d', dur: 0 },
   w_flamer:  { label: 'FLAMETHROWERS', short: 'FLAMER', col: '#ff8a1f', dur: 0 }
@@ -1204,7 +1238,7 @@ function drawPanel(p) {
   const gr = g.createLinearGradient(0, 0, 0, h);
   if (good) { gr.addColorStop(0, 'rgba(90,170,255,.85)'); gr.addColorStop(1, 'rgba(20,90,220,.55)'); } else { gr.addColorStop(0, 'rgba(255,110,95,.85)'); gr.addColorStop(1, 'rgba(200,25,20,.55)'); }
   g.fillStyle = gr; g.fillRect(0, 0, w, h);
-  g.strokeStyle = good ? '#cfe6ff' : '#ffd6cf'; g.lineWidth = 8; g.strokeRect(4, 4, w - 8, h - 8);
+  g.strokeStyle = p.boost && good ? '#ffc531' : good ? '#cfe6ff' : '#ffd6cf'; g.lineWidth = p.boost && good ? 14 : 8; g.strokeRect(p.boost && good ? 7 : 4, p.boost && good ? 7 : 4, w - (p.boost && good ? 14 : 8), h - (p.boost && good ? 14 : 8));
   g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.font = '84px Bungee, Impact, sans-serif';
   g.shadowColor = 'rgba(0,0,0,.45)'; g.shadowOffsetY = 5; g.fillText(gateText(p.spec), w / 2, h / 2 + 4); g.shadowColor = 'transparent';
   if (p.spec.kind === 'add') { g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(24, h - 22, w - 48, 8); g.fillStyle = '#fff'; g.fillRect(24, h - 22, (w - 48) * p.prog, 8); }
@@ -1223,6 +1257,52 @@ function makeGate(z, L, R, hitsPer) {
   });
   return { z, grp, panels, hitsPer, passed: false, fade: 0 };
 }
+/* power-up icons, drawn with paths so they work on any device */
+function drawPowerIcon(g, type, cx, cy, s, ink) {
+  g.save(); g.translate(cx, cy); g.scale(s, s); g.fillStyle = ink; g.strokeStyle = ink; g.lineWidth = .16; g.lineJoin = 'round'; g.lineCap = 'round';
+  const poly = pts => { g.beginPath(); pts.forEach(([x, y], i) => i ? g.lineTo(x, y) : g.moveTo(x, y)); g.closePath(); g.fill(); };
+  const bullet = (w, top, bot) => poly([[0, top], [w, top + w * 1.4], [w, bot], [-w, bot], [-w, top + w * 1.4]]);
+  switch (type) {
+    case 'rapid': poly([[.2, -.9], [-.5, .12], [-.04, .12], [-.22, .9], [.5, -.16], [.04, -.16]]); break;
+    case 'spread': for (const a of [-.55, 0, .55]) { g.save(); g.translate(0, .75); g.rotate(a); g.translate(0, -.75); bullet(.13, -.85, -.05); g.restore(); } g.fillRect(-.45, .55, .9, .14); break;
+    case 'power': bullet(.3, -.9, .45); g.fillRect(-.36, .55, .72, .3); break;
+    case 'shield': g.beginPath(); g.moveTo(0, -.9); g.lineTo(.72, -.6); g.bezierCurveTo(.72, .15, .45, .6, 0, .9); g.bezierCurveTo(-.45, .6, -.72, .15, -.72, -.6); g.closePath(); g.fill(); break;
+    case 'freeze': g.lineWidth = .15; for (let i = 0; i < 3; i++) { g.save(); g.rotate(i * Math.PI / 3); g.beginPath(); g.moveTo(0, -.88); g.lineTo(0, .88);
+      for (const d of [-1, 1]) { g.moveTo(0, d * .5); g.lineTo(.24, d * .72); g.moveTo(0, d * .5); g.lineTo(-.24, d * .72); } g.stroke(); g.restore(); } break;
+    case 'strike': g.beginPath(); g.ellipse(0, .2, .42, .6, 0, 0, TAU); g.fill(); poly([[-.4, -.85], [.4, -.85], [.16, -.4], [-.16, -.4]]); break;
+    case 'recruit': g.beginPath(); g.arc(-.15, -.45, .28, 0, TAU); g.fill(); g.beginPath(); g.moveTo(-.65, .85); g.quadraticCurveTo(-.65, -.1, -.15, -.1); g.quadraticCurveTo(.35, -.1, .35, .85); g.fill();
+      g.fillRect(.45, -.2, .45, .14); g.fillRect(.605, -.425, .14, .59); break;
+    case 'sprint': g.lineWidth = .26; for (const y of [-.25, .35]) { g.beginPath(); g.moveTo(-.6, y + .45); g.lineTo(0, y - .25); g.lineTo(.6, y + .45); g.stroke(); } break;
+    case 'magnet': g.lineWidth = .34; g.lineCap = 'butt'; g.beginPath(); g.arc(0, -.05, .5, Math.PI, 0); g.lineTo(.5, .55); g.moveTo(-.5, -.05); g.lineTo(-.5, .55); g.stroke();
+      g.fillStyle = '#fff'; g.fillRect(-.67, .55, .34, .3); g.fillRect(.33, .55, .34, .3); break;
+    case 'double': g.font = '900 1.05px Bungee, Impact, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('x2', 0, .08); break;
+    case 'turret': poly([[-.7, .85], [.7, .85], [.45, .2], [-.45, .2]]); g.beginPath(); g.arc(0, .05, .38, Math.PI, 0); g.fill(); g.save(); g.rotate(-.6); g.fillRect(-.09, -.95, .18, .8); g.restore(); break;
+    default: g.font = '900 .5px Bungee, Impact, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText((POWER[type] && POWER[type].short) || '?', 0, 0);
+  }
+  g.restore();
+}
+const iconCache = {};
+function powerIconURL(type) {
+  if (iconCache[type]) return iconCache[type];
+  const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d');
+  drawPowerIcon(g, type, 32, 32, 22, POWER[type].col); return iconCache[type] = c.toDataURL();
+}
+/* power tokens: a glowing disc spinning over the road under a beam of light; run the squad through it to take it */
+const tokenGeo = new THREE.CylinderGeometry(.6, .6, .13, 36).rotateX(Math.PI / 2), beamGeo = new THREE.CylinderGeometry(.42, .7, 7, 20, 1, true).translate(0, 3.5, 0), tokenRingGeo = new THREE.RingGeometry(.75, .95, 36).rotateX(-Math.PI / 2);
+function makeToken(x, z, type) {
+  const P = POWER[type], cv = document.createElement('canvas'); cv.width = cv.height = 128; const g = cv.getContext('2d');
+  const gr = g.createRadialGradient(64, 54, 8, 64, 64, 64); gr.addColorStop(0, '#ffffff'); gr.addColorStop(.55, P.col); gr.addColorStop(1, '#2a2a2a');
+  g.fillStyle = gr; g.beginPath(); g.arc(64, 64, 62, 0, TAU); g.fill(); g.lineWidth = 7; g.strokeStyle = '#121212'; g.beginPath(); g.arc(64, 64, 56, 0, TAU); g.stroke();
+  drawPowerIcon(g, type, 64, 64, 34, '#141414');
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+  const face = new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }), rim = new THREE.MeshBasicMaterial({ color: new THREE.Color(P.col).multiplyScalar(.6), toneMapped: false });
+  const grp = new THREE.Group(); grp.position.set(x, 0, z); scene.add(grp);
+  const disc = new THREE.Mesh(tokenGeo, [rim, face, face]); disc.scale.setScalar(1.3); disc.position.y = 1.25; grp.add(disc);
+  const beam = new THREE.Mesh(beamGeo, new THREE.MeshBasicMaterial({ color: P.col, transparent: true, opacity: .16, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, toneMapped: false })); grp.add(beam);
+  const ring = new THREE.Mesh(tokenRingGeo, new THREE.MeshBasicMaterial({ color: P.col, transparent: true, opacity: .7, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false })); ring.position.y = .06; grp.add(ring);
+  return { x, z, type, grp, disc, beam, ring, dead: false, ph: Math.random() * TAU };
+}
+function disposeToken(k) { scene.remove(k.grp); k.disc.material[1].map.dispose(); for (const m of [...k.disc.material, k.beam.material, k.ring.material]) m.dispose(); }
 function drawCrate(c) {
   const g = c.ctx, w = 128, P = POWER[c.type];
   g.fillStyle = '#7a4c25'; g.fillRect(0, 0, w, w);
@@ -1230,8 +1310,9 @@ function drawCrate(c) {
   g.strokeStyle = '#4a2c12'; g.lineWidth = 8; g.strokeRect(4, 4, w - 8, w - 8);
   g.fillStyle = P.col; g.fillRect(10, 34, w - 20, 60); g.strokeStyle = '#111'; g.lineWidth = 3; g.strokeRect(10, 34, w - 20, 60);
   g.fillStyle = '#111'; g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.font = (P.short.length > 7 ? 15 : 18) + 'px Bungee, Impact, sans-serif'; g.fillText(P.short, w / 2, 50);
-  g.font = '30px Bungee, Impact, sans-serif'; g.fillText(Math.max(0, Math.ceil(c.hp)), w / 2, 78);
+  if (c.type.startsWith('w_')) { g.font = (P.short.length > 7 ? 15 : 18) + 'px Bungee, Impact, sans-serif'; g.fillText(P.short, w / 2, 50); }
+  else { drawPowerIcon(g, c.type, 30, 64, 20, '#111'); g.font = (P.short.length > 6 ? 13 : 16) + 'px Bungee, Impact, sans-serif'; g.fillText(P.short, 78, 50); }
+  g.font = '30px Bungee, Impact, sans-serif'; g.fillText(Math.max(0, Math.ceil(c.hp)), c.type.startsWith('w_') ? w / 2 : 78, 78);
   c.tex.needsUpdate = true;
 }
 function makeCrate(x, z, type, hp) {
@@ -1252,9 +1333,9 @@ function newGame(L, preview = false) {
   if (G) teardown();
   setTheme(themeFor(L));
   const st = stats();
-  G = { L, preview, st, t: 0, sx: 0, tx: 0, sz: 0, speed: 7.2, phase: 'run', len: Math.min(560, 230 + L * 26), R: 1,
-    soldiers: [], fallen: [], zombies: [], bullets: [], gates: [], crates: [], hordes: [], boss: null, bossSpawned: false, bossHp: 300,
-    pw: { rapid: 0, spread: 0, shield: 0, freeze: 0 }, weapon: weaponUnlocked(save.weapon || 'rifle') ? (save.weapon || 'rifle') : 'rifle', rockets: [], flaming: false, strikes: [], kills: 0, coinsRun: 0, shake: 0, hurt: 0, doneT: 0, bubblePop: 0, shotN: 0, stompT: 0 };
+  G = { L, preview, st, t: 0, sx: 0, tx: 0, sz: 0, speed: 5.4, vel: 5.4, halt: false, phase: 'run', len: Math.min(560, 230 + L * 26), R: 1,
+    soldiers: [], fallen: [], zombies: [], bullets: [], gates: [], crates: [], tokens: [], hordes: [], boss: null, bossSpawned: false, bossHp: 300,
+    pw: { rapid: 0, spread: 0, shield: 0, freeze: 0, power: 0, sprint: 0, magnet: 0, double: 0, turret: 0 }, magT: 0, turT: 0, lossAcc: 0, lossT: 0, weapon: weaponUnlocked(save.weapon || 'rifle') ? (save.weapon || 'rifle') : 'rifle', rockets: [], flaming: false, strikes: [], kills: 0, coinsRun: 0, shake: 0, hurt: 0, doneT: 0, bubblePop: 0, shotN: 0, stompT: 0 };
   for (let i = 0; i < st.men; i++) addSoldier(true);
   layoutSquad(true);
   if (!preview) genLevel(L);
@@ -1263,10 +1344,14 @@ function newGame(L, preview = false) {
   for (const r of rings) r.m.visible = false;
   camPos.set(0, 11, 12); camLook.set(0, 0, -9);
 }
-function teardown() { for (const g of G.gates) disposeObj(g.grp); for (const c of G.crates) if (!c.dead) { disposeObj(c.mesh); disposeObj(c.halo); } }
+function teardown() { for (const g of G.gates) disposeObj(g.grp); for (const c of G.crates) if (!c.dead) { disposeObj(c.mesh); disposeObj(c.halo); } for (const k of G.tokens) if (!k.dead) disposeToken(k); }
 
+const unlockedPowers = (L, carrier) => Object.keys(POWER).filter(k => POWER[k][carrier] && POWER[k].unlock <= L);
 function genLevel(L) {
-  let z = -34, E = G.st.men; const end = -G.len + 30;
+  let z = -34, E = G.st.men, slot = 0; const end = -G.len + 30;
+  // a power-up new on this level shows up early (first crate or token), so the player meets it straight away
+  let introCrate = unlockedPowers(L, 'crate').find(k => POWER[k].unlock === L && !POWER[k].token), introToken = unlockedPowers(L, 'token').find(k => POWER[k].unlock === L);
+  const tokenPool = unlockedPowers(L, 'token');
   while (z > end) {
     const good = (E < 14 && Math.random() < .25) ? { kind: 'mul', v: E < 6 && Math.random() < .3 ? 3 : 2 } : { kind: 'add', v: Math.round(rand(4, 8) + L * 1.2) };
     let bad; const r = Math.random();
@@ -1277,10 +1362,19 @@ function genLevel(L) {
     G.gates.push(makeGate(z, pair[0], pair[1], 20));
     E = good.kind === 'mul' ? Math.min(MAXS, E * good.v) : E + good.v;
     z -= 15;
-    if (Math.random() < .7) {
-      const type = pick(['rapid', 'rapid', 'spread', 'shield', 'freeze', 'strike', 'recruit', 'w_shotgun', 'w_rocket', 'w_rocket', 'w_flamer']);
-      G.crates.push(makeCrate(rand(-3.2, 3.2), z, type, Math.round(10 + L * 4 + E * .6))); // a squad of 8 breaks one in a second or two
+    let crateX = null;
+    if (introCrate || Math.random() < .7) {
+      const type = introCrate || pick(['rapid', 'rapid', 'spread', 'shield', 'freeze', 'strike', 'recruit', 'w_shotgun', 'w_rocket', 'w_rocket', 'w_flamer', 'power', 'turret'].filter(k => POWER[k].unlock <= L));
+      introCrate = null; crateX = rand(-3.2, 3.2);
+      G.crates.push(makeCrate(crateX, z, type, Math.round(10 + L * 4 + E * .6))); // a squad of 8 breaks one in a second or two
     }
+    // power tokens stand just before a horde, off to one side: steer over to take one
+    if (introToken || (slot > 0 && Math.random() < .42)) {
+      const type = introToken || pick(tokenPool); introToken = null;
+      let x = (Math.random() < .5 ? -1 : 1) * rand(1.4, 3.1); if (crateX !== null && Math.abs(x - crateX) < 1.6) x = -x;
+      G.tokens.push(makeToken(x, z - 6, type));
+    }
+    slot++;
     z -= 11;
     const n = clamp(Math.round(E * rand(.65, .95) + L * 1.2), 6, 120);
     G.hordes.push({ z, n, brutes: L >= 2 ? Math.floor(rand(0, 1 + L / 2.5)) : 0, spawned: false });
@@ -1294,7 +1388,7 @@ function genLevel(L) {
 function addSoldier(instant = false) {
   if (G.soldiers.length >= MAXS) return;
   const hero = G.soldiers.length === 0;
-  G.soldiers.push({ ox: 0, oz: 1.5, tx: 0, tz: 0, hero, cd: rand(0, .3), phase: rand(0, TAU), pop: instant ? 1 : 0, torso: hero ? HERO.torso : pick(SOL.uniform) });
+  G.soldiers.push({ ab: Math.random(), ox: 0, oz: 1.5, tx: 0, tz: 0, hero, cd: rand(0, .3), phase: rand(0, TAU), pop: instant ? 1 : 0, torso: hero ? HERO.torso : pick(SOL.uniform) });
 }
 function layoutSquad(snap = false) {
   const n = G.soldiers.length; G.R = .42 * Math.sqrt(Math.max(1, n - 1)) + .35;
@@ -1323,7 +1417,7 @@ function killSoldier(idx) {
   if (!G.soldiers[idx]) return;
   if (G.soldiers[idx].hero && G.soldiers.length > 1) idx = G.soldiers.length - 1; // the hero falls last
   soldierDeathFX(G.soldiers[idx]); G.soldiers.splice(idx, 1);
-  layoutSquad(); G.bubblePop = .6; sfx.hurt(); G.hurt = Math.min(1, G.hurt + .35);
+  layoutSquad(); G.bubblePop = .6; sfx.hurt(); G.hurt = Math.min(1, G.hurt + .35); G.lossAcc++;
 }
 
 /* ---------- zombies ---------- */
@@ -1346,6 +1440,7 @@ function spawnHorde(h) {
 // cause: 'bullet' | 'blast' | 'contact'; (fx, fz) = where the hit came from
 function hurtZombie(z, dmg, cause = 'bullet', fx = z.x, fz = z.z + 5, hitY = 0) {
   if (z.dying || !z.shirt) return;
+  if (G.pw.power > 0 && cause !== 'contact') dmg *= 2;
   z.hp -= dmg; z.flash = .06;
   if (z.hp <= 0) { killZombie(z, cause, fx, fz, hitY); return; }
   if (z.type !== 'boss' && z.flinch <= 0) { // stagger: play the hit reaction and get knocked back a step
@@ -1440,7 +1535,7 @@ function updateRockets(dt) {
 /* flamethrower: a roaring stream of fire puffs; damage is applied to everything in the cone */
 function flamePuff(x, z, sc) {
   // the stream inherits the squad's run speed, so it reaches well out in front instead of trailing behind
-  const run = G.phase === 'run' ? G.speed : 0, y = .72 * sc * SBASE, sway = (G.tx - G.sx) * .5;
+  const run = G.phase === 'run' ? G.vel : 0, y = .72 * sc * SBASE, sway = (G.tx - G.sx) * .5;
   for (let k = 0, n = hiQ ? 2 : 1; k < n; k++) {
     const v = rand(21, 25), pre = rand(0, .03); // spread spawn along the first few cm so the jet is continuous
     flameFx.add({ x: x + rand(-.04, .04), y: y + .02, z: z - v * pre, vx: rand(-.7, .7) + sway, vy: rand(.6, 1.4), vz: -(v + run), size: rand(.16, .24) * (hiQ ? 1 : 1.2), grow: rand(8, 10), stretch: .055,
@@ -1462,6 +1557,10 @@ function flameDamage(dt, n, rateMult) {
 }
 function applyGate(spec, x) {
   const before = G.soldiers.length;
+  if (G.pw.double > 0 && gateGood(spec)) { // gate boost: this blue gate counts twice
+    G.pw.double = 0; spec = spec.kind === 'add' ? { kind: 'add', v: spec.v * 2 } : { kind: 'mul', v: spec.v + 1 };
+    floatText('BOOST!', G.sx, 4.2, G.sz - 1, POWER.double.col, 30); sfx.boost(); addRing(G.sx, G.sz, G.R + 3, POWER.double.col, .6);
+  }
   const after = clamp(spec.kind === 'add' ? before + spec.v : spec.kind === 'mul' ? before * spec.v : Math.ceil(before / spec.v), 0, MAXS);
   setSquadCount(after);
   floatText(gateText(spec), G.sx, 3, G.sz - 1, gateGood(spec) ? '#7cc4ff' : '#ff8a7a', 34);
@@ -1470,12 +1569,20 @@ function applyGate(spec, x) {
 }
 function setWeapon(w) { G.weapon = w; sfx.weapon(w); updateWeaponChip(); }
 function applyPower(type) {
-  const P = POWER[type];
-  banner(P.label, type.startsWith('w_') ? 'NEW WEAPON' : '', 1300, P.col); sfx.power();
+  const P = POWER[type], first = !save.seen.includes(type);
+  if (first && !G.preview) { save.seen.push(type); store.set('seen', save.seen); }
+  banner(P.label, type.startsWith('w_') ? 'NEW WEAPON' : first && P.hint ? 'NEW: ' + P.hint : '', first ? 2400 : 1300, P.col); sfx.power(type);
   if (type === 'strike') { sfx.missile(); for (let i = 0; i < 9; i++) G.strikes.push({ t: .25 + i * .12, x: rand(-HALF + .8, HALF - .8), z: G.sz - 7 - i * 3.6 }); }
   else if (type.startsWith('w_')) setWeapon(type.slice(2));
   else if (type === 'recruit') { const add = 5 + Math.round(G.L * 1.5); setSquadCount(G.soldiers.length + add); floatText('+' + add, G.sx, 3, G.sz - 1, '#5ee07a', 32); }
-  else G.pw[type] = P.dur;
+  else { G.pw[type] = P.dur; if (type === 'turret') { turretGrp.position.set(clamp(G.sx + G.R + 1.1, -HALF + .6, HALF - .6), 0, G.sz); turretPop = 0; } }
+}
+function takeToken(k) {
+  k.dead = true; sfx.token();
+  const col = new THREE.Color(POWER[k.type].col);
+  for (let i = 0; i < 26; i++) { const a = Math.random() * TAU, sp = rand(2, 6); sparks.add(k.x, 1.25, k.z, Math.cos(a) * sp, rand(1, 6), Math.sin(a) * sp, .6, col); }
+  flashes.add(k.x, 1.2, k.z, 0, 0, 0, .35, col); addRing(k.x, k.z, 3.4, POWER[k.type].col, .55); addRing(G.sx, G.sz, G.R + 2.5, POWER[k.type].col, .6);
+  disposeToken(k); applyPower(k.type);
 }
 function crateBreak(c) {
   c.dead = true; sfx.crate();
@@ -1519,13 +1626,20 @@ const buckets = new Map();
 function update(dt) {
   G.t += dt;
   const st = G.st;
-  if (keys['a'] || keys['arrowleft']) G.tx -= 8 * dt;
-  if (keys['d'] || keys['arrowright']) G.tx += 8 * dt;
+  const sprint = G.pw.sprint > 0;
+  if (keys['a'] || keys['arrowleft']) G.tx -= (sprint ? 12 : 8) * dt;
+  if (keys['d'] || keys['arrowright']) G.tx += (sprint ? 12 : 8) * dt;
   G.tx = clamp(G.tx, -HALF + .9, HALF - .9);
-  G.sx += (G.tx - G.sx) * (1 - Math.exp(-dt * 12));
+  G.sx += (G.tx - G.sx) * (1 - Math.exp(-dt * (sprint ? 20 : 12)));
 
   if (G.phase === 'run') {
-    G.sz -= G.speed * dt;
+    // the squad holds its ground while a brute is almost on it, and fights it out before marching on
+    const wasHalt = G.halt; G.halt = !sprint && G.zombies.some(z => !z.dying && z.type === 'brute' && z.z > G.sz - G.R - 4.5 && z.z < G.sz + 1);
+    if (G.halt && !wasHalt && G.t - (G.haltMsgT || -9) > 6) { G.haltMsgT = G.t; floatText('HOLD!', G.sx, 3.6, G.sz - 1, '#ffd23f', 26); }
+    const want = G.halt ? 0 : G.speed * (sprint ? 1.6 : 1);
+    G.vel += (want - G.vel) * (1 - Math.exp(-dt * (want < G.vel ? 7 : 3)));
+    G.sz -= G.vel * dt;
+    if (sprint && Math.random() < dt * 40) sparks.add(G.sx + rand(-4.5, 4.5), rand(.3, 2.6), G.sz - rand(3, 10), 0, 1.2, 22, .22, C.white);
     if (G.sz <= -G.len) { G.sz = -G.len; G.phase = 'boss'; banner('BOSS!', BOSS_NAMES[(G.L - 1) % BOSS_NAMES.length], 1800, '#ff6a5a'); sfx.roar(); $('bossbar').hidden = false; }
   }
   if (G.phase === 'done') { G.doneT -= dt; if (G.doneT <= 0) { levelWin(); return; } }
@@ -1538,7 +1652,21 @@ function update(dt) {
     $('bossName').textContent = BOSS_NAMES[(G.L - 1) % BOSS_NAMES.length];
   }
 
-  for (const k in G.pw) if (G.pw[k] > 0) G.pw[k] = Math.max(0, G.pw[k] - dt);
+  for (const k in G.pw) if (G.pw[k] > 0) { G.pw[k] = Math.max(0, G.pw[k] - dt); if (G.pw[k] === 0 && k !== 'double') sfx.expire(); }
+  if (G.pw.magnet > 0 && (G.magT -= dt) <= 0) { // the magnet pulls crates ahead open, one at a time
+    const c = G.crates.find(c => !c.dead && G.sz - c.z > -1 && G.sz - c.z < 25);
+    if (c) { G.magT = .3; const col = new THREE.Color(POWER.magnet.col); for (let i = 0; i <= 14; i++) { const f = i / 14; sparks.add(G.sx + (c.x - G.sx) * f, 1 + Math.sin(f * Math.PI) * 1.6, G.sz + (c.z - G.sz) * f, rand(-.4, .4), 1, rand(-.4, .4), .35, col); } crateBreak(c); }
+  }
+  if (G.pw.turret > 0) {
+    turretGrp.position.x += (clamp(G.sx + G.R + 1.1, -HALF + .6, HALF - .6) - turretGrp.position.x) * Math.min(1, dt * 8); turretGrp.position.z = G.sz + .3;
+    const tg = G.phase === 'boss' && G.boss && !G.boss.dying ? G.boss : bigThreat(RANGE) || nearestZombie(RANGE);
+    if (tg) { turretGrp.rotation.y += (Math.atan2(-(tg.x - turretGrp.position.x), turretGrp.position.z - tg.z) - turretGrp.rotation.y) * Math.min(1, dt * 10); }
+    if (tg && (G.turT -= dt) <= 0) {
+      G.turT = .12; const tx = turretGrp.position.x, tz = turretGrp.position.z - .9, ang = clamp(Math.atan2(tg.x - tx, Math.max(2, tz - tg.z)), -.6, .6);
+      addBullet(tx, tz, ang + rand(-.02, .02), G.st.dmg * 2.2, false, true); muzzle.add(tx + Math.sin(ang) * .3, 1.05, tz - .2, 0, 0, -2, .06, C.spark); sfx.sentry();
+    }
+  }
+  if (G.lossAcc > 0 && (G.lossT -= dt) <= 0) { floatText('−' + G.lossAcc, G.sx + rand(-.4, .4), 3.2, G.sz, '#ff6a5a', 22 + Math.min(14, G.lossAcc * 2)); G.lossAcc = 0; G.lossT = .5; }
   for (const s of G.strikes) { s.t -= dt; if (s.t <= 0 && !s.done) { s.done = true; explosion(s.x, .2, s.z, 3, true); blast(s.x, s.z, 3.2, 40 + G.L * 12); G.shake = Math.max(G.shake, .5); sfx.explode(s.x, s.z, true); } }
   G.strikes = G.strikes.filter(s => !s.done);
 
@@ -1548,6 +1676,7 @@ function update(dt) {
   const p = Math.min(1, (wk === 'rocket' ? 9 : wk === 'flamer' ? 70 : SHOT_CAP / (wk === 'shotgun' ? 5 : 1)) / Math.max(1, shots)); // keep effects affordable; damage is scaled back up
   const target = G.phase === 'done' ? null : nearestAhead();
   const crateT = G.phase === 'run' ? G.crates.find(c => !c.dead && G.sz - c.z > 1 && G.sz - c.z < RANGE) : null; // nearest crate ahead
+  const bigT = G.phase === 'run' ? bigThreat(RANGE * .85) : null; // brutes draw the fire: the hero and most of the squad aim at them
   let fired = 0, heroFired = false;
   for (const s of G.soldiers) {
     s.ox += (s.tx - s.ox) * Math.min(1, dt * 6); s.oz += (s.tz - s.oz) * Math.min(1, dt * 6);
@@ -1557,7 +1686,7 @@ function update(dt) {
     if (s.cd <= 0) {
       s.cd += 1 / st.rate * rand(.85, 1.15);
       if (target && (s.hero || Math.random() < p)) {
-        const [x, z] = soldierWorld(s), sc = s.hero ? 1.45 : 1, aim = G.boss && !G.boss.dying && G.phase === 'boss' ? G.boss : crateT && Math.abs(crateT.x - x) < 2.6 ? crateT : null; // soldiers near a crate's lane aim at it
+        const [x, z] = soldierWorld(s), sc = s.hero ? 1.45 : 1, aim = G.boss && !G.boss.dying && G.phase === 'boss' ? G.boss : bigT && (s.hero || s.ab < .65) ? bigT : crateT && Math.abs(crateT.x - x) < 2.6 ? crateT : null; // soldiers near a crate's lane aim at it
         if (s.hero || wk === 'rifle') fire(x + .05 * sc, z - .7 * sc, s.hero ? st.dmg * 1.5 : st.dmg / p, s.hero, aim);
         else if (wk === 'shotgun') { for (let k = 0; k < 5; k++) addBullet(x + .05, z - .7, rand(-.2, .2) + (aim ? clamp(Math.atan2(aim.x - x, Math.max(2, z - aim.z)), -.45, .45) : 0), st.dmg * .78 / p, false, false, 'pellet', 19); }
         else if (wk === 'rocket') addRocket(x + .05, z - .8, target, st.dmg * 2.6 / p);
@@ -1591,7 +1720,7 @@ function update(dt) {
     let hit = false;
     for (const c of G.crates) {
       if (c.dead || Math.abs(b.x - c.x) > 1) continue;
-      if (z0 >= c.z - .6 && b.z <= c.z + .6) { c.hp -= b.dmg; c.flash = .06; c.dirty = 1; hit = true; if (c.hp <= 0) crateBreak(c); break; }
+      if (z0 >= c.z - .6 && b.z <= c.z + .6) { c.hp -= b.dmg * (G.pw.power > 0 ? 2 : 1); c.flash = .06; c.dirty = 1; hit = true; if (c.hp <= 0) crateBreak(c); break; }
     }
     if (hit) { b.life = 0; sparks.add(b.x, .9, b.z, rand(-2, 2), rand(1, 3), 2, .25, C.spark); continue; }
     const kHi = Math.floor(z0) + 2, kLo = Math.floor(b.z) - 3;
@@ -1670,8 +1799,17 @@ function update(dt) {
   // gates
   for (const g of G.gates) {
     if (!g.passed && G.sz <= g.z) { g.passed = true; const side = G.sx < 0 ? 0 : 1; applyGate(g.panels[side].spec, g.panels[side].mesh.position.x); g.fade = 1; }
-    for (const pn of g.panels) { if (pn.dirty) { pn.dirty = 0; drawPanel(pn); } pn.mesh.scale.lerp(ONE, Math.min(1, dt * 8)); }
+    const boost = G.pw.double > 0 && !g.passed;
+    for (const pn of g.panels) { if (!!pn.boost !== boost) { pn.boost = boost; pn.dirty = 1; } if (pn.dirty) { pn.dirty = 0; drawPanel(pn); } pn.mesh.scale.lerp(ONE, Math.min(1, dt * 8)); }
     if (g.passed && g.fade > 0) { g.fade -= dt * 2; g.grp.position.y = -(1 - Math.max(0, g.fade)) * 4; if (g.fade <= 0) g.grp.visible = false; }
+  }
+  // power tokens: spin, bob, and get taken when the squad runs over them
+  for (const k of G.tokens) {
+    if (k.dead) continue;
+    k.ph += dt; k.disc.rotation.y = k.ph * 2.6; k.disc.position.y = 1.25 + Math.sin(k.ph * 3) * .12;
+    k.beam.material.opacity = .12 + Math.sin(k.ph * 4) * .05; k.ring.scale.setScalar(1 + Math.sin(k.ph * 5) * .08);
+    if (Math.abs(k.z - G.sz) < G.R + .7 && Math.abs(k.x - G.sx) < G.R + .8) takeToken(k);
+    else if (k.z > G.sz + 6) { k.dead = true; disposeToken(k); }
   }
   // crates
   for (const c of G.crates) {
@@ -1716,6 +1854,13 @@ function update(dt) {
   if (G.soldiers.length === 0 && G.phase !== 'lost') { G.phase = 'lost'; G.lostT = .9; }
   if (G.phase === 'lost') { G.lostT -= dt; if (G.lostT <= 0) levelLose(); }
 }
+// the biggest zombie close enough to matter: brutes first, then bosses on the run, nearest of those
+function bigThreat(range) {
+  let best = null, bd = 1e9;
+  for (const z of G.zombies) { if (z.dying || z.type === 'walker') continue; const d = G.sz - z.z; if (d > -1 && d < range && d < bd) { bd = d; best = z; } }
+  return best;
+}
+function nearestZombie(range) { for (const z of G.zombies) { if (z.dying) continue; const d = G.sz - z.z; if (d > -1 && d < range) return z; } return null; }
 function nearestAhead() {
   for (const z of G.zombies) { if (z.dying) continue; const d = G.sz - z.z; if (d > -1 && d < RANGE + 2) return z; }
   for (const c of G.crates) if (!c.dead && G.sz - c.z > 0 && G.sz - c.z < RANGE) return c;
@@ -1760,6 +1905,8 @@ function sync(dt) {
     if (f.t < 1.3) pushBlob(f.x, f.z, SBASE * .6);
   }
   flushInst(SOLD); if (HEROM) flushInst(HEROM);
+  turretGrp.visible = G.pw.turret > 0;
+  if (turretGrp.visible) { turretPop = Math.min(1, turretPop + dt * 4); const sc = (1 - (1 - turretPop) ** 3) * (G.pw.turret < 1 ? G.pw.turret : 1); turretGrp.scale.setScalar(Math.max(.01, sc) * 1.15); }
   shieldMesh.visible = G.pw.shield > 0;
   if (shieldMesh.visible) { shieldMesh.position.set(G.sx, 0, G.sz); shieldMesh.scale.set(G.R + 1, G.R + 1.2, G.R + 1.2); shieldMesh.material.opacity = .14 + Math.sin(t * 8) * .05 + (G.pw.shield < 1.5 ? Math.sin(t * 30) * .08 : 0); }
 
@@ -1801,9 +1948,9 @@ function sync(dt) {
   // tracers
   tracerMesh.count = G.bullets.length;
   G.bullets.forEach((b, i) => {
-    const len = b.kind === 'pellet' ? .5 : b.hero ? 1.3 : 1, w = b.kind === 'pellet' ? .8 : b.hero ? 1.6 : 1;
+    const pw = G.pw.power > 0 ? 1.5 : 1, len = (b.kind === 'pellet' ? .5 : b.hero ? 1.3 : 1) * pw, w = (b.kind === 'pellet' ? .8 : b.hero ? 1.6 : 1) * pw;
     _q.setFromAxisAngle(_v.set(0, 1, 0), Math.atan2(-b.vx, -b.vz)); _sv.set(w, w, len); _v.set(b.x, b.hero ? 1.25 : .92, b.z + .4);
-    tracerMesh.setMatrixAt(i, _m.compose(_v, _q, _sv)); tracerMesh.setColorAt(i, b.rocket ? TR_ROCKET : b.hero ? TR_HERO : TR_BULLET);
+    tracerMesh.setMatrixAt(i, _m.compose(_v, _q, _sv)); tracerMesh.setColorAt(i, b.rocket ? TR_ROCKET : G.pw.power > 0 ? TR_POWER : G.pw.rapid > 0 ? TR_RAPID : b.hero ? TR_HERO : TR_BULLET);
   });
   tracerMesh.instanceMatrix.needsUpdate = true; if (tracerMesh.instanceColor) tracerMesh.instanceColor.needsUpdate = true;
 
@@ -1832,15 +1979,19 @@ function sync(dt) {
 
 /* ================= HUD ================= */
 const chipEls = {};
-for (const k of ['rapid', 'spread', 'shield', 'freeze']) {
-  const d = document.createElement('div'); d.className = 'chip'; d.style.setProperty('--c', POWER[k].col); d.innerHTML = POWER[k].short + '<i></i>'; d.hidden = true; $('chips').appendChild(d); chipEls[k] = d;
+for (const k of ['rapid', 'spread', 'power', 'shield', 'freeze', 'sprint', 'magnet', 'double', 'turret']) { // a running power-up: its icon inside a ring that drains
+  const d = document.createElement('div'); d.className = 'pwr'; d.style.setProperty('--c', POWER[k].col); d.title = POWER[k].label;
+  const img = new Image(); img.alt = POWER[k].short; d.appendChild(img); d.hidden = true; $('chips').appendChild(d); chipEls[k] = d;
 }
+document.fonts && document.fonts.ready.then(() => { for (const k in chipEls) { delete iconCache[k]; chipEls[k].firstChild.src = powerIconURL(k); } });
+for (const k in chipEls) chipEls[k].firstChild.src = powerIconURL(k);
 let lastCoins = -1;
 function updateHud() {
   if (!G || G.preview || state === 'win' || state === 'lose') { bubble.hidden = true; return; }
   $('progBar').style.width = (clamp(-G.sz / G.len, 0, 1) * 100) + '%';
   const coins = Math.floor(save.coins + G.coinsRun); if (coins !== lastCoins) { lastCoins = coins; $('hudCoins').textContent = coins; }
-  for (const k in chipEls) { const on = G.pw[k] > 0; if (chipEls[k].hidden === on) chipEls[k].hidden = !on; if (on) chipEls[k].lastChild.style.width = (G.pw[k] / POWER[k].dur * 100) + '%'; }
+  for (const k in chipEls) { const on = G.pw[k] > 0, el = chipEls[k]; if (el.hidden === on) el.hidden = !on;
+    if (on) { el.style.setProperty('--p', (G.pw[k] / POWER[k].dur * 100).toFixed(1) + '%'); el.classList.toggle('end', G.pw[k] < 1.5); } }
   if (G.boss && !G.boss.dying) $('bossHp').style.width = (Math.max(0, G.boss.hp) / G.boss.maxHp * 100) + '%';
   const n = G.soldiers.length;
   if (n > 0) {
@@ -1986,7 +2137,7 @@ async function loadZombieModels() {
 Promise.all([document.fonts ? document.fonts.load('40px Bungee').catch(() => {}) : 0, loadTroops(), loadVAT('zombie', MAXZ, { gore: true }), fetch('models/zombie-gibs.json').then(r => r.json()), loadZombieModels()]).then(([, s, z, gibData, texGibs]) => {
   SOLD = s; ZOMB = z; buildGibs(texGibs || gibData); $('playBtn').disabled = false; goMenu(); requestAnimationFrame(frame);
 }).catch(err => { $('playBtn').textContent = 'COULD NOT LOAD MODELS'; console.error(err); });
-window.__dt = { info: (hide) => { const g = []; if (hide) scene.traverse(o => { if (o.isInstancedMesh && o !== SOLD.mesh && !(HEROM && o === HEROM.mesh) && o !== ZOMB.mesh && !ZALL.some(R => R.mesh === o) && o.visible) { o.visible = false; g.push(o); } }); renderer.render(scene, camera); const r = { tris: renderer.info.render.triangles, calls: renderer.info.render.calls }; g.forEach(o => o.visible = true); return r; }, mk: (x, z, t = 'walker') => makeZombie(x, z, t), audio: () => ({ ctx: AC && AC.state, loaded: Object.keys(buffers).length, voices }), camera, THREE, get G() { return G; }, get state() { return state; }, start: startLevel, setTheme, step(dt) { if (state === 'play') update(dt); }, sync, render: () => (hiQ && composer ? composer.render() : renderer.render(scene, camera)), save, persist };
+window.__dt = { info: (hide) => { const g = []; if (hide) scene.traverse(o => { if (o.isInstancedMesh && o !== SOLD.mesh && !(HEROM && o === HEROM.mesh) && o !== ZOMB.mesh && !ZALL.some(R => R.mesh === o) && o.visible) { o.visible = false; g.push(o); } }); renderer.render(scene, camera); const r = { tris: renderer.info.render.triangles, calls: renderer.info.render.calls }; g.forEach(o => o.visible = true); return r; }, mk: (x, z, t = 'walker') => makeZombie(x, z, t), audio: () => ({ ctx: AC && AC.state, loaded: Object.keys(buffers).length, voices }), camera, THREE, get G() { return G; }, get state() { return state; }, start: startLevel, power: t => applyPower(t), setTheme, step(dt) { if (state === 'play') update(dt); }, sync, render: () => (hiQ && composer ? composer.render() : renderer.render(scene, camera)), save, persist };
 </script>
 </body>
 </html>
