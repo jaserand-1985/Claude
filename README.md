@@ -10,6 +10,7 @@ A 3D zombie lane shooter for Android phones. Your squad charges down a road thro
 - **Zombies:** every zombie that reaches your squad takes a soldier with it. Brutes (big and purple) take three. If your whole squad falls, the run is over.
 - **Boss:** at the end of every level your squad stops and the boss walks in. Its stomps knock out soldiers, so kill it fast.
 - **Armory:** coins from kills, survivors and bosses buy permanent upgrades between levels.
+- **New game:** the game saves your level, coins and upgrades and picks up where you left off. **NEW GAME** at the bottom of the menu (tap it twice) starts again from level 1 with nothing.
 
 ### Maps
 

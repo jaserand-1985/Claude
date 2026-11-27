@@ -114,6 +114,7 @@ h2{font-family:var(--display);font-size:clamp(30px,9vw,40px);margin:0;color:var(
       <div class="row2"><button class="btn ghost" id="wpnBtn">WEAPON: RIFLE</button><button class="btn ghost" id="mapBtn">MAP: AUTO</button></div>
       <div class="row2"><button class="btn ghost" id="soundBtn">SOUND: ON</button><button class="btn ghost" id="gfxBtn">GRAPHICS: HIGH</button></div>
       <button class="btn ghost" id="goreBtn">BLOOD &amp; GORE: ON</button>
+      <button class="btn ghost" id="resetBtn">NEW GAME: START AT LEVEL 1</button>
     </div></div>
   </div>
 
@@ -2201,6 +2202,15 @@ $('soundBtn').onclick = $('soundBtn2').onclick = () => { ensureAudio(); setSound
 $('wpnBtn').onclick = () => { const list = WEAPON_ORDER.filter(weaponUnlocked); save.weapon = list[(list.indexOf(save.weapon) + 1) % list.length]; persist(); refreshLoadout(); ensureAudio(); sfx.weapon(save.weapon); if (list.length === 1) banner('SHOTGUN', 'UNLOCKS AT LEVEL 2', 1400); };
 $('mapBtn').onclick = () => { const opts = ['auto', ...THEME_ORDER]; save.map = opts[(opts.indexOf(save.map) + 1) % opts.length]; persist(); refreshLoadout(); newGame(save.level, true); banner(THEMES[themeFor(save.level)].name, save.map === 'auto' ? 'CHANGES EVERY LEVEL' : 'SELECTED MAP', 1200); };
 $('goreBtn').onclick = $('goreBtn2').onclick = () => { goreOn = !goreOn; store.set('gore', goreOn); refreshSound(); if (!goreOn) { drops.length = 0; sprays.length = 0; gibs.length = 0; bloodDecals.clear(); } };
+// new game: tap twice to confirm (no browser dialogs); wipes level, coins, upgrades and retry backup, keeps settings
+let resetArm = 0;
+$('resetBtn').onclick = () => {
+  const b = $('resetBtn');
+  if (Date.now() - resetArm > 3000) { resetArm = Date.now(); b.textContent = 'TAP AGAIN: LOSE ALL PROGRESS'; setTimeout(() => { if (Date.now() - resetArm >= 3000) b.textContent = 'NEW GAME: START AT LEVEL 1'; }, 3100); return; }
+  resetArm = 0; b.textContent = 'NEW GAME: START AT LEVEL 1';
+  save.level = 1; save.coins = 0; save.up = { dmg: 0, rate: 0, men: 0, coin: 0 }; save.weapon = 'rifle'; save.fails = {}; store.set('fails', {}); persist();
+  ensureAudio(); sfx.good(); goMenu(); banner('NEW GAME', 'BACK TO LEVEL 1', 1400);
+};
 $('gfxBtn').onclick = $('gfxBtn2').onclick = () => { store.set('gfxChosen', true); setQuality(!hiQ); };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state === 'play') togglePause(); if (!document.hidden && state === 'play') requestWake(); });
 
