@@ -50,6 +50,15 @@ canvas{display:block;width:100%;height:100%}
   color:var(--hazard);text-shadow:0 4px 0 #000,0 0 24px rgba(0,0,0,.5);opacity:0;transform:scale(.8);transition:opacity .25s,transform .25s;padding-inline:16px}
 .banner small{display:block;font-family:var(--body);font-weight:800;font-size:14px;color:var(--ink);letter-spacing:.18em;margin-top:6px}
 .banner.on{opacity:1;transform:scale(1)}
+.xhair{position:absolute;left:50%;top:50%;width:44px;height:44px;margin:-22px 0 0 -22px;pointer-events:none;opacity:0;transition:opacity .3s}
+.xhair.on{opacity:1}
+.xhair i{position:absolute;background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.55);border-radius:1px}
+.xhair i:nth-child(1){left:21px;top:2px;width:2px;height:12px}.xhair i:nth-child(2){left:21px;bottom:2px;width:2px;height:12px}
+.xhair i:nth-child(3){top:21px;left:2px;height:2px;width:12px}.xhair i:nth-child(4){top:21px;right:2px;height:2px;width:12px}
+.xhair b{position:absolute;left:20px;top:20px;width:4px;height:4px;border-radius:50%;background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.55)}
+.xhair.hit i{background:#ffd23f}.xhair.head i,.xhair.head b{background:#ff4a3d}.xhair.head{transform:scale(1.25)}
+.fpshint{position:absolute;left:0;right:0;bottom:calc(env(safe-area-inset-bottom,0px) + 112px);text-align:center;pointer-events:none;font-weight:800;font-size:13px;letter-spacing:.14em;color:rgba(255,255,255,.88);text-shadow:0 2px 0 #000;opacity:0;transition:opacity .5s;padding-inline:16px}
+.fpshint.on{opacity:1}
 .hint{position:absolute;left:0;right:0;bottom:calc(env(safe-area-inset-bottom,0px) + 28px);text-align:center;pointer-events:none;font-weight:800;font-size:14px;letter-spacing:.14em;
   color:rgba(255,255,255,.8);text-shadow:0 2px 0 #000;transition:opacity .5s}
 .sheet{position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:center;pointer-events:none;
@@ -103,6 +112,8 @@ h2{font-family:var(--display);font-size:clamp(30px,9vw,40px);margin:0;color:var(
     <div class="bossbar" id="bossbar" hidden><span id="bossName">ROTFATHER</span><div><i id="bossHp"></i></div></div>
   </div>
   <div class="banner" id="banner"></div>
+  <div class="xhair" id="xhair"><i></i><i></i><i></i><i></i><b></b></div>
+  <div class="fpshint" id="fpsHint">DRAG TO AIM · SHOOT THE HEAD</div>
   <div class="hint" id="hint" hidden>DRAG LEFT AND RIGHT TO STEER</div>
 
   <div id="menu">
@@ -114,6 +125,7 @@ h2{font-family:var(--display);font-size:clamp(30px,9vw,40px);margin:0;color:var(
       <div class="row2"><button class="btn ghost" id="wpnBtn">WEAPON: RIFLE</button><button class="btn ghost" id="mapBtn">MAP: AUTO</button></div>
       <div class="row2"><button class="btn ghost" id="soundBtn">SOUND: ON</button><button class="btn ghost" id="gfxBtn">GRAPHICS: HIGH</button></div>
       <button class="btn ghost" id="goreBtn">BLOOD &amp; GORE: ON</button>
+      <button class="btn ghost" id="fpsBtn">BOSS VIEW: FIRST PERSON</button>
     </div></div>
   </div>
 
@@ -122,6 +134,7 @@ h2{font-family:var(--display);font-size:clamp(30px,9vw,40px);margin:0;color:var(
     <button class="btn" id="resumeBtn">RESUME</button>
     <div class="row2"><button class="btn ghost" id="soundBtn2">SOUND: ON</button><button class="btn ghost" id="gfxBtn2">GRAPHICS: HIGH</button></div>
     <button class="btn ghost" id="goreBtn2">BLOOD &amp; GORE: ON</button>
+    <button class="btn ghost" id="fpsBtn2">BOSS VIEW: FIRST PERSON</button>
     <button class="btn ghost" id="quitBtn">QUIT</button>
   </div></div></div>
 
@@ -175,6 +188,7 @@ const save = { fails: store.get('fails', {}), seen: store.get('seen', []), weapo
 function persist() { store.set('weapon', save.weapon); store.set('map', save.map); store.set('level', save.level); store.set('coins', save.coins); store.set('up', save.up); }
 
 /* ================= audio: recorded CC0 samples (see audio/CREDITS.md) ================= */
+let fpsOn = store.get('fps', true); // boss fights in first person through the squad leader's eyes (OFF = the classic overhead view)
 let goreOn = store.get('gore', true); // OFF = kid-friendly: no blood, no severed body parts
 let AC = null, soundOn = store.get('sound', true), noiseBuf = null, master = null, reverbIn = null, voices = 0, ambienceSrc = null;
 const SAMPLES = {
@@ -555,7 +569,31 @@ if (((int(iFx.z + .5) >> int(aGroup + .5)) & 1) == 1) transformed = vec3(0.); //
   };
   const mesh = new THREE.InstancedMesh(g, mat, max);
   mesh.count = 0; mesh.frustumCulled = false; mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); mesh.customDepthMaterial = depthMat; mesh.castShadow = hiQ; scene.add(mesh);
-  return { meta, mesh, iAnim, iTint, iFx, clips: meta.clips, n: 0 };
+  // where each body part (0 torso, 1 head, 2-3 arms, 4-5 legs) sits in every frame, so a first-person shot can find the real head
+  let parts = null, headR = 0;
+  if (o.group !== undefined) {
+    const grp = new Uint8Array(buf, o.group, V), F = meta.frames, step = meta.rows * meta.W, cnt = new Float32Array(6), h = THREE.DataUtils.fromHalfFloat;
+    parts = new Float32Array(F * 18);
+    for (let v = 0; v < V; v++) if (grp[v] < 6) cnt[grp[v]]++;
+    const idx = []; for (let v = 0; v < V; v += 3) if (grp[v] < 6) idx.push(v); // every third vertex is plenty for a centroid
+    const cs = new Float32Array(6); for (const v of idx) cs[grp[v]]++;
+    for (let f = 0; f < F; f++) for (const v of idx) { const g = grp[v], b = (f * step + v) * 4, q = f * 18 + g * 3;
+      parts[q] += h(vat[b]) / cs[g]; parts[q + 1] += h(vat[b + 1]) / cs[g]; parts[q + 2] += h(vat[b + 2]) / cs[g]; }
+    for (const v of idx) if (grp[v] === 1) headR = Math.max(headR, Math.hypot(h(vat[v * 4]) - parts[3], h(vat[v * 4 + 1]) - parts[4], h(vat[v * 4 + 2]) - parts[5]));
+    if (!cs[1]) parts = null;
+  }
+  return { meta, mesh, iAnim, iTint, iFx, clips: meta.clips, n: 0, parts, headR };
+}
+// world position of body part g of zombie z as last drawn (null if the model has no part data)
+function partWorld(z, g, out) {
+  const R = z.model; if (!R || !R.parts || !z._clip) return null;
+  const c = R.clips[z._clip], t = z._at; let p, fa, fb;
+  if (c.loop) { p = (((t / c.dur) % 1) + 1) % 1 * c.frames; fa = Math.floor(p); fb = (fa + 1) % c.frames; }
+  else { p = clamp(t / c.dur, 0, 1) * (c.frames - 1); fa = Math.floor(p); fb = Math.min(fa + 1, c.frames - 1); }
+  const P = R.parts, a = (c.start + fa) * 18 + g * 3, b = (c.start + fb) * 18 + g * 3, f = p - fa, sc = zScale(z);
+  const lx = (P[a] + (P[b] - P[a]) * f) * sc, ly = (P[a + 1] + (P[b + 1] - P[a + 1]) * f) * sc, lz = (P[a + 2] + (P[b + 2] - P[a + 2]) * f) * sc;
+  const cy = Math.cos(z.yaw), sy = Math.sin(z.yaw);
+  return out.set(z.x + lx * cy + lz * sy, ly + (z.lift || 0), z.z - lx * sy + lz * cy);
 }
 function setAnim(R, i, clip, t) {
   const c = R.clips[clip]; let p, fa, fb;
@@ -1601,7 +1639,7 @@ function updateRockets(dt) {
     const z0 = r.z; r.spd = Math.min(34, r.spd + 45 * dt); r.wob += dt * 18;
     r.x += (r.dx * r.spd + Math.sin(r.wob) * .6) * dt; r.z += r.dz * r.spd * dt; r.life -= dt;
     r.trail -= dt;
-    if (r.trail <= 0) { r.trail = .022;
+    if (r.trail <= 0 && !(G.fps && G.fps.k > .5 && r.z > G.sz - G.R - 5)) { r.trail = .022; // first person: no smoke right in front of the lens
       smokeFx.add({ x: r.x, y: r.y, z: r.z + .25, vx: rand(-.3, .3), vy: rand(.1, .5), vz: rand(-.2, .2), size: rand(.22, .32), grow: 3.6, life: rand(.7, 1.1), drag: 2, buoy: .5, r: .62, g: .6, b: .58 });
       fireFx.add({ x: r.x, y: r.y, z: r.z + .2, vz: 3, size: .32, grow: 1.2, life: .07, drag: 1 }); }
     // gates count rocket hits too
@@ -1695,17 +1733,178 @@ function bossDown(z) {
   banner('BOSS DOWN!', 'LEVEL ' + G.L + ' CLEARED', 2000);
 }
 
+/* ---------- first-person boss fights ----------
+   When the boss walks in, the camera drops into the squad leader's eyes. Drag to aim; the leader's minigun fires
+   where the crosshair points, and the head is the weak spot. The squad keeps shooting the boss on its own. */
+const FPS_RATE = 14, FPS_HEAD = 2.5;
+const _fl = new THREE.Vector3(), _fe = new THREE.Vector3(), _fd = new THREE.Vector3(), _fm = new THREE.Vector3(), _fh = new THREE.Vector3();
+scene.add(camera); // the weapon rides on the camera
+const fpsGun = (() => { // a compact minigun held low on the right, in real-world size (metres from the eye)
+  const g = new THREE.Group(), std = (color, metalness, roughness, emissive) => new THREE.MeshStandardMaterial({ color, metalness, roughness, emissive }),
+    metal = std('#3a3e44', .8, .35, '#1a1c20'), dark = std('#18191b', .6, .5, '#0b0b0c'), olive = std('#4f5835', .1, .8, '#191c0e'),
+    brass = std('#c39a45', .9, .3, '#33240b'), glove = std('#2b2723', 0, .9, '#100e0c'), sleeve = std('#46503a', 0, .95, '#151a10');
+  const cyl = (r, l, m, seg = 10) => new THREE.Mesh(new THREE.CylinderGeometry(r, r, l, seg).rotateX(Math.PI / 2), m);
+  const box = (w, h, d, m) => new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+  const at = (o, x, y, z) => { o.position.set(x, y, z); g.add(o); return o; };
+  const spin = new THREE.Group(); g.add(spin); // the barrel cluster, spun up while firing
+  for (let i = 0; i < 6; i++) { const a = i / 6 * TAU, b = cyl(.0055, .3, metal, 6); b.position.set(Math.cos(a) * .015, Math.sin(a) * .015, -.2); spin.add(b); }
+  for (const z of [-.09, -.24, -.345]) { const c = cyl(.024, .012, dark, 12); c.position.z = z; spin.add(c); }
+  const hub = cyl(.009, .3, dark, 6); hub.position.z = -.2; spin.add(hub);
+  at(cyl(.03, .1, metal, 14), 0, 0, 0);                    // receiver
+  at(box(.04, .045, .07, dark), 0, -.02, .07);              // motor housing
+  at(box(.008, .008, .09, dark), 0, .045, -.005);           // carry handle
+  at(box(.008, .02, .008, dark), 0, .035, -.045); at(box(.008, .02, .008, dark), 0, .035, .035);
+  at(box(.012, .008, .05, olive), .03, -.018, .03);         // ammo belt feed
+  for (let i = 0; i < 4; i++) { const r = cyl(.0032, .014, brass, 6); r.rotation.set(0, 0, Math.PI / 2); at(r, .03, -.012, .05 - i * .009); }
+  const grip = at(box(.018, .05, .022, dark), .0, -.048, .085); grip.rotation.x = -.35;
+  at(box(.03, .032, .042, glove), .004, -.055, .09);        // right hand on the grip
+  const flash = new THREE.Mesh(new THREE.PlaneGeometry(.16, .16), new THREE.MeshBasicMaterial({ map: starTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, color: '#ffd9a0', fog: false }));
+  flash.position.z = -.37; g.add(flash);
+  const light = new THREE.PointLight('#ffb35a', 0, 6, 1.6); light.position.set(0, .03, -.45); g.add(light);
+  g.traverse(o => { if (o.isMesh) { o.frustumCulled = false; o.renderOrder = 5; } });
+  g.visible = false; camera.add(g);
+  return { g, spin, flash, light };
+})();
+// tracers from the muzzle to wherever each round lands
+const FPS_TR = 24, fpsTr = [];
+const fpsTrMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1).translate(0, 0, -.5), new THREE.MeshBasicMaterial({ color: '#ffc36b', transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }), FPS_TR);
+fpsTrMesh.frustumCulled = false; fpsTrMesh.count = 0; scene.add(fpsTrMesh);
+const fpsActive = () => !!(G && G.fps && G.fps.on);
+const fpsAiming = () => !!(G && state === 'play' && G.fps && G.fps.on && G.fps.k > .3);
+function fpsLook(dx, dy) {
+  const F = G.fps, s = 1.5 / Math.max(320, canvas.clientWidth);
+  F.yaw = clamp(F.yaw + dx * s, -.95, .95); F.pitch = clamp(F.pitch - dy * s, -.2, .95);
+  F.touched = true;
+}
+function fpsEye(out) { // the squad leader's eyes
+  const h = G.soldiers.find(s => s.hero) || G.soldiers[0];
+  const [x, z] = h ? soldierWorld(h) : [G.sx, G.sz];
+  return out.set(x, 1.55, z + .05);
+}
+function fpsDir(out, F) { const cp = Math.cos(F.pitch); return out.set(Math.sin(F.yaw) * cp, Math.sin(F.pitch), -Math.cos(F.yaw) * cp); }
+// boss hit shape: a vertical cylinder for the body and a sphere for the head (its weak spot)
+const _fpH = new THREE.Vector3(), _fpT = new THREE.Vector3();
+function fpsBossShape(b) { // the head and torso follow the animation, so you hit what you see
+  const H = zScale(b), r = .36 * b.s + .05, head = partWorld(b, 1, _fpH), torso = head && partWorld(b, 0, _fpT);
+  if (head && torso) return { H, r, cx: torso.x, cz: torso.z, top: Math.max(torso.y, head.y - b.model.headR * H * .9), hx: head.x, hy: head.y, hz: head.z, hr: Math.max(.35, b.model.headR * H * 1.15) };
+  return { H, r, cx: b.x, cz: b.z, top: .76 * H, hx: b.x, hy: .86 * H, hz: b.z + .08 * H, hr: Math.max(.35, .13 * H) };
+}
+function fpsRay(o, d, b) { // returns { t, head } for the first boss hit along the ray, or null
+  const S = fpsBossShape(b); let best = null;
+  // head sphere
+  { const ox = o.x - S.hx, oy = o.y - S.hy, oz = o.z - S.hz, bq = ox * d.x + oy * d.y + oz * d.z, c = ox * ox + oy * oy + oz * oz - S.hr * S.hr, D = bq * bq - c;
+    if (D >= 0) { const t = -bq - Math.sqrt(D); if (t > 0) best = { t, head: true }; } }
+  // body cylinder, up to the shoulders
+  { const ox = o.x - S.cx, oz = o.z - S.cz, a = d.x * d.x + d.z * d.z, bq = ox * d.x + oz * d.z, c = ox * ox + oz * oz - S.r * S.r, D = bq * bq - a * c;
+    if (a > 1e-6 && D >= 0) { const t = (-bq - Math.sqrt(D)) / a, y = o.y + d.y * t;
+      if (t > 0 && y > 0 && y < S.top && (!best || t < best.t)) best = { t, head: false }; } }
+  return best;
+}
+function fpsUpdate(dt) {
+  if (!G.fps) G.fps = { k: 0, on: false, yaw: 0, pitch: .05, cd: 0, spin: 0, spinV: 0, kick: 0, hitT: 0, head: false, hintT: 0, headMsgT: -9, touched: false };
+  const F = G.fps, b = G.boss;
+  const want = fpsOn && !G.preview && G.soldiers.length > 0 && (G.phase === 'boss' || (G.phase === 'done' && G.doneT > 1.2));
+  if (want && !F.on) { // start the fight looking straight at it
+    F.on = true; F.touched = false; fpsEye(_fe);
+    if (b) { const dz = Math.max(3, _fe.z - b.z); F.yaw = clamp(Math.atan2(b.x - _fe.x, dz), -.6, .6); F.pitch = clamp(Math.atan2(.55 * zScale(b) - _fe.y, dz), -.1, .6); }
+    if (!save.seen.includes('fps')) { F.hintT = 4; if (!G.preview) { save.seen.push('fps'); store.set('seen', save.seen); } } else F.hintT = 2;
+  }
+  if (!want) F.on = false;
+  F.k = clamp(F.k + dt * (want ? .9 : -1.1), 0, 1);
+  F.hitT -= dt; F.hintT -= dt; F.kick = Math.max(0, F.kick - dt * 9);
+  const firing = F.on && F.k > .8 && b && !b.dying && G.phase === 'boss';
+  F.spinV += ((firing ? 1 : 0) - F.spinV) * Math.min(1, dt * 5); F.spin += F.spinV * dt * 38;
+  if (!firing) return;
+  // gentle aim assist when the crosshair is already close to the body and you're not dragging
+  fpsEye(_fe);
+  if (!drag.on) {
+    const S = fpsBossShape(b), want = Math.atan2(S.cx - _fe.x, Math.max(1, _fe.z - S.cz)), dy = want - F.yaw;
+    if (Math.abs(dy) < .14) F.yaw += dy * Math.min(1, dt * 2.5);
+    const pTop = Math.atan2(S.hy + S.hr - _fe.y, Math.max(1, _fe.z - b.z)), pLow = Math.atan2(.1 * S.H - _fe.y, Math.max(1, _fe.z - b.z));
+    if (F.pitch > pTop + .05 && F.pitch < pTop + .25) F.pitch += (pTop - F.pitch) * Math.min(1, dt * 2);
+    if (F.pitch < pLow) F.pitch += (pLow - F.pitch) * Math.min(1, dt * 2);
+  }
+  F.cd -= dt * (G.pw.rapid > 0 ? 2.4 : 1);
+  let shots = 0;
+  while (F.cd <= 0 && shots < 4) { F.cd += 1 / FPS_RATE; shots++; fpsShot(F, b); }
+  if (shots) sfx.gun(0, true, dt);
+}
+function fpsShot(F, b) {
+  fpsEye(_fe); fpsDir(_fd, F);
+  const sp = .014; _fd.x += rand(-sp, sp); _fd.y += rand(-sp, sp) * .7; _fd.z += rand(-sp, sp); _fd.normalize();
+  const n = Math.max(8, G.soldiers.length), dmg = G.st.dmg * (1.5 + .1 * n), hit = fpsRay(_fe, _fd, b);
+  let t = 60;
+  if (hit) {
+    t = hit.t; _fh.copy(_fd).multiplyScalar(t).add(_fe);
+    hurtZombie(b, dmg * (hit.head ? FPS_HEAD : 1), 'bullet', _fe.x, _fe.z, _fh.y);
+    F.hitT = .09; F.head = hit.head;
+    if (Math.random() < .5) bleed(_fh.x, _fh.y, _fh.z + .1, hit.head ? 4 : 2, -_fd.x, .4, -_fd.z, 1.4, 3.2, hit.head ? 1.2 : .9);
+    if (Math.random() < .35) sparks.add(_fh.x, _fh.y, _fh.z + .1, rand(-2, 2), rand(0, 3), rand(1, 3), .2, C.spark);
+    if (hit.head && G.t - F.headMsgT > .7) { F.headMsgT = G.t; floatText(Math.random() < .5 ? 'HEADSHOT!' : 'CRIT!', _fh.x + rand(-.6, .6), _fh.y + .6, _fh.z + .5, '#ff5a4a', 24); }
+  } else if (_fd.y < -.005) { // the round hits the road
+    t = Math.min(60, -_fe.y / _fd.y); _fh.copy(_fd).multiplyScalar(t).add(_fe);
+    if (Math.random() < .5) sparks.add(_fh.x, .05, _fh.z, rand(-1.5, 1.5), rand(1, 3), rand(-1, 1), .25, C.spark);
+  }
+  F.kick = 1;
+  // tracer from the muzzle (right of centre, below the eye) to the impact
+  fpsGun.flash.getWorldPosition(_fm);
+  if (Math.random() < .7) { if (fpsTr.length >= FPS_TR) fpsTr.shift(); fpsTr.push({ x: _fm.x, y: _fm.y, z: _fm.z, tx: _fe.x + _fd.x * t, ty: _fe.y + _fd.y * t, tz: _fe.z + _fd.z * t, life: .07 }); }
+  if (Math.random() < .5) addDebris(_fm.x + .3, _fm.y - .1, _fm.z + .6, C.gold, 1, 2, .35); // spent brass
+}
+const _fq = new THREE.Quaternion(), _fs = new THREE.Vector3(), _fz = new THREE.Vector3(0, 0, -1), _fu = new THREE.Vector3();
+// camera blend: from the overhead view (already in camera.position / _fl) to the leader's eyes. Returns the blend 0..1.
+function fpsCamera(dt) {
+  const F = G && G.fps; if (!F || F.k <= 0) return 0;
+  const e = F.k * F.k * (3 - 2 * F.k);
+  fpsEye(_fe); fpsDir(_fd, F);
+  const bob = Math.sin(G.t * 2.2) * .01 + F.kick * .006;
+  _fe.y += bob;
+  camera.position.lerp(_fe, e);
+  _fd.multiplyScalar(20).add(_fe); _fl.lerp(_fd, e);
+  return e;
+}
+function fpsView(dt, e) {
+  const F = G && G.fps, on = !!F && e > .6;
+  fpsGun.g.visible = on; if (on) $('hint').style.opacity = 0; $('xhair').classList.toggle('on', on && F.k > .9 && G.phase === 'boss');
+  $('fpsHint').classList.toggle('on', on && F.hintT > 0 && G.phase === 'boss');
+  if (on) {
+    const up = (e - .6) / .4, k = F.kick;
+    fpsGun.g.position.set(.085 + rand(-1, 1) * .0015 * k, -.095 - (1 - up) * .2 + Math.sin(G.t * 2.2) * .002, -.3 + k * .01);
+    fpsGun.g.rotation.set(.05 + k * .015, .11, 0); // angled in toward the crosshair
+    fpsGun.spin.rotation.z = F.spin;
+    const fl = k > .55 && F.spinV > .5; fpsGun.flash.visible = fl;
+    if (fl) { fpsGun.flash.rotation.z = Math.random() * TAU; fpsGun.flash.scale.setScalar(rand(.7, 1.15)); }
+    fpsGun.light.intensity = fl ? 2.5 : 0;
+    const x = $('xhair'); x.classList.toggle('hit', F.hitT > 0 && !F.head); x.classList.toggle('head', F.hitT > 0 && F.head);
+  }
+  // tracers
+  let i = 0;
+  for (const r of fpsTr) {
+    r.life -= dt; if (r.life <= 0) continue;
+    _fs.set(r.tx - r.x, r.ty - r.y, r.tz - r.z); const L = _fs.length(), f = 1 - r.life / .07, seg = Math.min(L, 2.2);
+    _fu.set(r.x, r.y, r.z).addScaledVector(_fs, Math.min(1, f + .2) * (L - seg) / L + seg / L); // the streak travels out to the impact
+    _fq.setFromUnitVectors(_fz, _fs.divideScalar(L || 1));
+    _v.copy(_fu); _sv.set(.025, .025, seg);
+    fpsTrMesh.setMatrixAt(i++, _m.compose(_v, _fq, _sv));
+  }
+  for (let j = fpsTr.length - 1; j >= 0; j--) if (fpsTr[j].life <= 0) fpsTr.splice(j, 1);
+  fpsTrMesh.count = i; fpsTrMesh.instanceMatrix.needsUpdate = true;
+}
+function fpsReset() { fpsGun.g.visible = false; fpsTr.length = 0; fpsTrMesh.count = 0; $('xhair').classList.remove('on'); $('fpsHint').classList.remove('on'); }
+
 /* ---------- input ---------- */
 const drag = { on: false, id: null, x0: 0, sx0: 0 }; const keys = {};
 canvas.addEventListener('pointerdown', e => {
   ensureAudio(); if (state !== 'play') return;
   if (drag.on && drag.id !== e.pointerId) { try { canvas.releasePointerCapture(drag.id); } catch (err) {} }
-  drag.on = true; drag.id = e.pointerId; drag.x0 = e.clientX; drag.sx0 = G.tx;
+  drag.on = true; drag.id = e.pointerId; drag.x0 = e.clientX; drag.sx0 = G.tx; drag.lx = e.clientX; drag.ly = e.clientY;
   try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
   $('hint').style.opacity = 0;
 });
 canvas.addEventListener('pointermove', e => {
   if (!drag.on || e.pointerId !== drag.id) return;
+  const ddx = e.clientX - drag.lx, ddy = e.clientY - drag.ly; drag.lx = e.clientX; drag.ly = e.clientY;
+  if (fpsAiming()) { fpsLook(ddx, ddy); return; }
   const k = (ROAD_W * 1.25) / Math.max(320, canvas.clientWidth);
   G.tx = clamp(drag.sx0 + (e.clientX - drag.x0) * k, -HALF + .9, HALF - .9);
 });
@@ -1721,8 +1920,11 @@ function update(dt) {
   G.t += dt;
   const st = G.st;
   const sprint = G.pw.sprint > 0;
+  if (fpsAiming()) { const kx = (keys['d'] || keys['arrowright'] ? 1 : 0) - (keys['a'] || keys['arrowleft'] ? 1 : 0), ky = (keys['s'] || keys['arrowdown'] ? 1 : 0) - (keys['w'] || keys['arrowup'] ? 1 : 0); if (kx || ky) fpsLook(kx * 260 * dt, ky * 260 * dt); }
+  else {
   if (keys['a'] || keys['arrowleft']) G.tx -= (sprint ? 12 : 8) * dt;
   if (keys['d'] || keys['arrowright']) G.tx += (sprint ? 12 : 8) * dt;
+  }
   G.tx = clamp(G.tx, -HALF + .9, HALF - .9);
   G.sx += (G.tx - G.sx) * (1 - Math.exp(-dt * (sprint ? 20 : 12)));
 
@@ -1736,12 +1938,13 @@ function update(dt) {
     if (sprint && Math.random() < dt * 40) sparks.add(G.sx + rand(-4.5, 4.5), rand(.3, 2.6), G.sz - rand(3, 10), 0, 1.2, 22, .22, C.white);
     if (G.sz <= -G.len) { G.sz = -G.len; G.phase = 'boss'; { const B = bossFor(G.L); banner(B.name, B.tag || 'BOSS!', 2200, '#ff6a5a'); } sfx.roar(); $('bossbar').hidden = false; }
   }
+  fpsUpdate(dt);
   if (G.phase === 'done') { G.doneT -= dt; if (G.doneT <= 0) { levelWin(); return; } }
 
   for (const h of G.hordes) if (!h.spawned && h.z > G.sz - 72) spawnHorde(h);
   if (!G.bossSpawned && G.sz < -G.len + 70) {
     G.bossSpawned = true;
-    G.bossHp = Math.round(30 * Math.max(8, G.soldiers.length) * G.st.dmg * (G.st.rate / 3.4) * (1 + G.L * .06) * bossFor(G.L).hp * ({ rocket: .75, flamer: .8 }[G.weapon] || 1)); // rockets and flamers do less to one big target
+    G.bossHp = Math.round(30 * Math.max(8, G.soldiers.length) * G.st.dmg * (G.st.rate / 3.4) * (1 + G.L * .06) * bossFor(G.L).hp * ({ rocket: .75, flamer: .8 }[G.weapon] || 1) * (fpsOn ? 2.4 : 1)); // first person: a longer fight, and your own aim decides how long // rockets and flamers do less to one big target
     // supply drop: if the squad's gun is wrong for this boss, or the squad is thin, a crate lands in its lane before the fight
     { const B = bossFor(G.L), poor = G.weapon === 'flamer' || (G.weapon !== 'rocket' && (B.res.bullet || 0) >= .3), thin = G.soldiers.length < Math.min(90, 10 + G.L * 6);
       if (poor || thin) { const dc = makeCrate(clamp(G.sx, -3, 3), G.sz - 16, poor ? 'w_rocket' : 'recruit', Math.round(8 + G.L * 2)); dc.smart = true; G.crates.push(dc); floatText('SUPPLY DROP!', G.sx, 3.4, G.sz - 16, POWER[dc.type].col, 24); } }
@@ -1782,6 +1985,7 @@ function update(dt) {
     s.cd -= dt * rateMult * (s.hero ? 2.2 : W.rate);
     if (s.cd <= 0) {
       s.cd += 1 / st.rate * rand(.85, 1.15);
+      if (s.hero && G.fps && G.fps.k > .5) continue; // in first person the player fires the leader's minigun
       if (target && (s.hero || Math.random() < p)) {
         const [x, z] = soldierWorld(s), sc = s.hero ? 1.45 : 1, aim = G.boss && !G.boss.dying && G.phase === 'boss' ? G.boss : bigT && (s.hero || s.ab < .65) ? bigT : crateT && Math.abs(crateT.x - x) < 2.6 ? crateT : null; // soldiers near a crate's lane aim at it
         if (s.hero || wk === 'rifle') fire(x + .05 * sc, z - .7 * sc, s.hero ? st.dmg * 1.5 : st.dmg / p, s.hero, aim);
@@ -1876,9 +2080,10 @@ function update(dt) {
     z.phase += dt * (3 + spd * 2.2);
     z.yaw = Math.atan2(-clamp(vx, -1.1, 1.1), -Math.max(.5, z.grp ? spd + .5 : dz));
     if (z.type === 'boss') {
-      z.attack = z.z > G.sz - G.R - 4;
-      if (z.z > G.sz - G.R - 2.6) {
-        z.z = G.sz - G.R - 2.6; G.stompT -= dt;
+      const stand = fpsOn && !G.preview ? 2.6 + Math.min(5, 1.1 * z.s) : 2.6; // first person: it stops a few metres off, so it looms over you instead of filling the screen with its knees
+      z.attack = z.z > G.sz - G.R - stand - 1.4;
+      if (z.z > G.sz - G.R - stand) {
+        z.z = G.sz - G.R - stand; G.stompT -= dt;
         if (G.stompT <= 0) {
           G.stompT = .9; G.shake = Math.max(G.shake, .7); sfx.stomp(); addRing(z.x, z.z + 1.5, 4.5, '#ff8a5a', .5); explosion(z.x, .2, z.z + 1.6, 1.5);
           if (G.pw.shield > 0) G.pw.shield = Math.max(0, G.pw.shield - 2);
@@ -1994,9 +2199,11 @@ function sync(dt) {
   _cl.set(G.sx * .25, 0, G.sz - (bossView ? 17 : 15));
   if (G.preview) { _cp.set(Math.sin(t * .2) * 2.2, 6.5, 8.5); _cl.set(0, 1.4, -8); }
   const k = 1 - Math.exp(-dt * 5); camPos.lerp(_cp, k); camLook.lerp(_cl, k);
-  camera.position.copy(camPos);
-  if (G.shake > 0 && !reduceMotion) camera.position.add(_v.set(rand(-1, 1), rand(-1, 1), 0).multiplyScalar(G.shake * .35));
-  camera.lookAt(camLook);
+  camera.position.copy(camPos); _fl.copy(camLook);
+  const fe = fpsCamera(dt); // first person: blend to the squad leader's eyes
+  if (G.shake > 0 && !reduceMotion) camera.position.add(_v.set(rand(-1, 1), rand(-1, 1), 0).multiplyScalar(G.shake * (.35 - .26 * fe)));
+  camera.lookAt(_fl);
+  fpsView(dt, fe);
   sky.position.copy(camera.position); updateLod();
   sun.position.set(G.sx + 9, 24, G.sz - 16); sun.target.position.set(G.sx, 0, G.sz - 5); updateAtmos(dt, t);
 
@@ -2004,6 +2211,7 @@ function sync(dt) {
   blobN = 0;
   const pose = state === 'win' || G.preview ? 'victory' : G.phase === 'run' ? 'run' : 'walk';
   for (const s of G.soldiers) {
+    if (s.hero && G.fps && G.fps.k > .55) continue; // you are the leader now
     const [x, z] = soldierWorld(s);
     const R = s.hero && HEROM ? HEROM : SOLD, sc = SBASE * (R.scale || 1) * (s.hero ? 1.2 : 1) * easeBack(s.pop);
     const t = pose === 'walk' ? .05 : pose === 'victory' ? s.phase * .3 : s.phase / 11;
@@ -2031,6 +2239,7 @@ function sync(dt) {
     else if (z.attack) { clip = 'punch'; at = z.phase * (z.type === 'boss' ? .12 : .25); }
     else { clip = z.spd > 1.85 ? 'run' : 'walk'; at = z.phase / (clip === 'run' ? 6 : 4.5); }
     const flash = z.char > 0 ? -z.char * .92 : z.flash > 0 ? (z.type === 'boss' ? .22 : .38) : frozen ? .3 : 0;
+    z._clip = clip; z._at = at;
     pushInst(z.model || ZOMB, z.x, (z.lift || 0) - sink, z.z, z.yaw, sc, clip, at, z.shirt, 0, flash, z.mask || 0, z.tilt || 0);
     if (!z.dying || z.dying < 1.3) pushBlob(z.x, z.z, sc * .55);
   }
@@ -2057,9 +2266,10 @@ function sync(dt) {
 
   // tracers
   tracerMesh.count = G.bullets.length;
+  const nearZ = G.fps && G.fps.k > .5 ? G.sz - G.R - 4 : 1e9; // first person: rounds from the squad behind you only show once they're a few metres out
   G.bullets.forEach((b, i) => {
-    const pw = G.pw.power > 0 ? 1.5 : 1, len = (b.kind === 'pellet' ? .5 : b.hero ? 1.3 : 1) * pw, w = (b.kind === 'pellet' ? .8 : b.hero ? 1.6 : 1) * pw;
-    _q.setFromAxisAngle(_v.set(0, 1, 0), Math.atan2(-b.vx, -b.vz)); _sv.set(w, w, len); _v.set(b.x, b.hero ? 1.25 : .92, b.z + .4);
+    const pw = (G.pw.power > 0 ? 1.5 : 1) * (G.fps && G.fps.k > .5 ? .45 : 1), len = (b.kind === 'pellet' ? .5 : b.hero ? 1.3 : 1) * pw, w = (b.kind === 'pellet' ? .8 : b.hero ? 1.6 : 1) * pw;
+    _q.setFromAxisAngle(_v.set(0, 1, 0), Math.atan2(-b.vx, -b.vz)); _sv.set(w, w, len); if (b.z > nearZ) _sv.setScalar(0); _v.set(b.x, b.hero ? 1.25 : .92, b.z + .4);
     tracerMesh.setMatrixAt(i, _m.compose(_v, _q, _sv)); tracerMesh.setColorAt(i, b.rocket ? TR_ROCKET : G.pw.power > 0 ? TR_POWER : G.pw.rapid > 0 ? TR_RAPID : b.hero ? TR_HERO : TR_BULLET);
   });
   tracerMesh.instanceMatrix.needsUpdate = true; if (tracerMesh.instanceColor) tracerMesh.instanceColor.needsUpdate = true;
@@ -2105,7 +2315,8 @@ function updateHud() {
   if (G.boss && !G.boss.dying) $('bossHp').style.width = (Math.max(0, G.boss.hp) / G.boss.maxHp * 100) + '%';
   const n = G.soldiers.length;
   if (n > 0) {
-    const [x, y, vis] = project(G.sx, 3.3 + G.R * .25, G.sz);
+    let [x, y, vis] = project(G.sx, 3.3 + G.R * .25, G.sz);
+    if (G.fps && G.fps.k > .5) { x = canvas.clientWidth / 2; y = canvas.clientHeight - 74; vis = true; }
     bubble.hidden = !vis; bubble.textContent = n;
     bubble.style.transform = `translate(${x}px,${y}px) translate(-50%,-100%) scale(${1 + G.bubblePop * .35})`;
   } else bubble.hidden = true;
@@ -2150,7 +2361,8 @@ function refreshLoadout() {
 }
 function refreshSound() { const t = 'SOUND: ' + (soundOn ? 'ON' : 'OFF'); $('soundBtn').textContent = t; $('soundBtn2').textContent = t;
   const g = 'GRAPHICS: ' + (hiQ ? 'HIGH' : 'LOW'); $('gfxBtn').textContent = g; $('gfxBtn2').textContent = g;
-  const b = 'BLOOD & GORE: ' + (goreOn ? 'ON' : 'OFF'); $('goreBtn').textContent = b; $('goreBtn2').textContent = b; }
+  const b = 'BLOOD & GORE: ' + (goreOn ? 'ON' : 'OFF'); $('goreBtn').textContent = b; $('goreBtn2').textContent = b;
+  const f = 'BOSS VIEW: ' + (fpsOn ? 'FIRST PERSON' : 'CLASSIC'); $('fpsBtn').textContent = f; $('fpsBtn2').textContent = f; }
 function setQuality(high) { // LOW: no bloom/post, no character shadows, smaller shadow map, lower resolution
   hiQ = high; store.set('gfx', high ? 'high' : 'low');
   if (SOLD) SOLD.mesh.castShadow = high; if (HEROM) HEROM.mesh.castShadow = high; if (ZOMB) ZOMB.mesh.castShadow = high; for (const R of ZALL) R.mesh.castShadow = high; for (const m of gibMeshes) if (m) m.mesh.castShadow = high;
@@ -2164,7 +2376,7 @@ function goMenu() {
 async function startLevel() {
   ensureAudio();
   if (themeId !== themeFor(save.level)) { const b = $('playBtn'), t = b.textContent; b.textContent = 'LOADING MAP…'; b.disabled = true; try { await setTheme(themeFor(save.level), save.level); } finally { b.textContent = t; b.disabled = false; } } ['menu', 'pause', 'win', 'lose'].forEach(i => show(i, false)); show('hud', true); show('hint', true); $('hint').style.opacity = 1;
-  $('bossbar').hidden = true; for (const k in chipEls) chipEls[k].hidden = true;
+  $('bossbar').hidden = true; fpsReset(); for (const k in chipEls) chipEls[k].hidden = true;
   newGame(save.level); $('hudLv').textContent = 'LEVEL ' + save.level; lastCoins = -1; updateWeaponChip();
   state = 'play'; drag.on = false;
   banner('LEVEL ' + save.level, G.backup ? 'BACKUP ARRIVED: +' + G.backup + ' SOLDIERS' : THEMES[themeFor(save.level)].name + ' · ' + moodFor(save.level).name, G.backup ? 2200 : 1600, G.backup ? '#5ee07a' : '');
@@ -2198,6 +2410,7 @@ $('pauseBtn').onclick = togglePause; $('resumeBtn').onclick = togglePause;
 $('soundBtn').onclick = $('soundBtn2').onclick = () => { ensureAudio(); setSound(!soundOn); store.set('sound', soundOn); refreshSound(); };
 $('wpnBtn').onclick = () => { const list = WEAPON_ORDER.filter(weaponUnlocked); save.weapon = list[(list.indexOf(save.weapon) + 1) % list.length]; persist(); refreshLoadout(); ensureAudio(); sfx.weapon(save.weapon); if (list.length === 1) banner('SHOTGUN', 'UNLOCKS AT LEVEL 2', 1400); };
 $('mapBtn').onclick = () => { const opts = ['auto', ...THEME_ORDER]; save.map = opts[(opts.indexOf(save.map) + 1) % opts.length]; persist(); refreshLoadout(); newGame(save.level, true); banner(THEMES[themeFor(save.level)].name, save.map === 'auto' ? 'CHANGES EVERY LEVEL' : 'SELECTED MAP', 1200); };
+$('fpsBtn').onclick = $('fpsBtn2').onclick = () => { fpsOn = !fpsOn; store.set('fps', fpsOn); refreshSound(); };
 $('goreBtn').onclick = $('goreBtn2').onclick = () => { goreOn = !goreOn; store.set('gore', goreOn); refreshSound(); if (!goreOn) { drops.length = 0; sprays.length = 0; gibs.length = 0; bloodDecals.clear(); } };
 $('gfxBtn').onclick = $('gfxBtn2').onclick = () => { store.set('gfxChosen', true); setQuality(!hiQ); };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state === 'play') togglePause(); if (!document.hidden && state === 'play') requestWake(); });
@@ -2247,7 +2460,7 @@ async function loadZombieModels() {
 Promise.all([document.fonts ? document.fonts.load('40px Bungee').catch(() => {}) : 0, loadTroops(), loadVAT('zombie', MAXZ, { gore: true }), fetch('models/zombie-gibs.json').then(r => r.json()), loadZombieModels()]).then(([, s, z, gibData, texGibs]) => {
   SOLD = s; ZOMB = z; buildGibs(texGibs || gibData); $('playBtn').disabled = false; goMenu(); requestAnimationFrame(frame);
 }).catch(err => { $('playBtn').textContent = 'COULD NOT LOAD MODELS'; console.error(err); });
-window.__dt = { info: (hide) => { const g = []; if (hide) scene.traverse(o => { if (o.isInstancedMesh && o !== SOLD.mesh && !(HEROM && o === HEROM.mesh) && o !== ZOMB.mesh && !ZALL.some(R => R.mesh === o) && o.visible) { o.visible = false; g.push(o); } }); renderer.render(scene, camera); const r = { tris: renderer.info.render.triangles, calls: renderer.info.render.calls }; g.forEach(o => o.visible = true); return r; }, mk: (x, z, t = 'walker') => makeZombie(x, z, t), audio: () => ({ ctx: AC && AC.state, loaded: Object.keys(buffers).length, voices }), camera, THREE, get G() { return G; }, get state() { return state; }, start: startLevel, power: t => applyPower(t), setTheme, step(dt) { if (state === 'play') update(dt); }, tick(dt, draw) { if (state === 'play') update(dt); sync(state === 'paused' ? 0 : dt); updateHud(); updateFloats(state === 'paused' ? 0 : dt); if (draw) (hiQ && composer ? composer.render() : renderer.render(scene, camera)); }, get gore() { return goreOn; }, sync, render: () => (hiQ && composer ? composer.render() : renderer.render(scene, camera)), save, persist };
+window.__dt = { info: (hide) => { const g = []; if (hide) scene.traverse(o => { if (o.isInstancedMesh && o !== SOLD.mesh && !(HEROM && o === HEROM.mesh) && o !== ZOMB.mesh && !ZALL.some(R => R.mesh === o) && o.visible) { o.visible = false; g.push(o); } }); renderer.render(scene, camera); const r = { tris: renderer.info.render.triangles, calls: renderer.info.render.calls }; g.forEach(o => o.visible = true); return r; }, mk: (x, z, t = 'walker') => makeZombie(x, z, t), audio: () => ({ ctx: AC && AC.state, loaded: Object.keys(buffers).length, voices }), camera, THREE, get G() { return G; }, get state() { return state; }, start: startLevel, power: t => applyPower(t), setTheme, step(dt) { if (state === 'play') update(dt); }, tick(dt, draw) { if (state === 'play') update(dt); sync(state === 'paused' ? 0 : dt); updateHud(); updateFloats(state === 'paused' ? 0 : dt); if (draw) (hiQ && composer ? composer.render() : renderer.render(scene, camera)); }, get gore() { return goreOn; }, sync, render: () => (hiQ && composer ? composer.render() : renderer.render(scene, camera)), save, persist, headAt: z => partWorld(z, 1, new THREE.Vector3()) };
 </script>
 </body>
 </html>
