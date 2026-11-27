@@ -474,9 +474,31 @@ async function loadVAT(name, max, opts = {}) {
   g.setAttribute('iAnim', iAnim); g.setAttribute('iTint', iTint); g.setAttribute('iFx', iFx);
   const tex = new THREE.DataTexture(vat, meta.W, meta.rows * meta.frames, THREE.RGBAFormat, THREE.HalfFloatType);
   tex.minFilter = tex.magFilter = THREE.NearestFilter; tex.generateMipmaps = false; tex.needsUpdate = true;
-  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: .7, metalness: .05, side: opts.gore ? THREE.DoubleSide : THREE.FrontSide });
+  // textured models (tools/bake/bake_mixamo.py) also carry texture coordinates and a baked normal per vertex per frame
+  const textured = !!(o.uv !== undefined && meta.tex);
+  let nTex = null, map = null;
+  if (textured) {
+    g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(buf, o.uv, V * 2), 2));
+    g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(V * 3), 3));
+    nTex = new THREE.DataTexture(new Uint8Array(buf, o.nvat, meta.W * meta.rows * meta.frames * 4), meta.W, meta.rows * meta.frames, THREE.RGBAFormat, THREE.UnsignedByteType);
+    nTex.minFilter = nTex.magFilter = THREE.NearestFilter; nTex.generateMipmaps = false; nTex.needsUpdate = true;
+    map = await new THREE.TextureLoader().loadAsync(`models/${meta.tex}`); map.colorSpace = THREE.SRGBColorSpace; map.flipY = false; map.anisotropy = Math.min(4, maxAniso);
+  }
+  for (const k of ['walk', 'run', 'punch', 'death', 'hit']) if (!meta.clips[k]) meta.clips[k] = meta.clips.walk || Object.values(meta.clips)[0]; // missing clips fall back to walking
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: !textured, map, roughness: textured ? .82 : .7, metalness: .05, side: opts.gore ? THREE.DoubleSide : THREE.FrontSide });
   mat.onBeforeCompile = sh => {
     sh.uniforms.vatTex = { value: tex };
+    if (textured) {
+      sh.uniforms.nvatTex = { value: nTex };
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', `#include <common>
+uniform highp sampler2D nvatTex; varying float vFlash;
+vec3 nvatFetch(float fr) { int v = gl_VertexID; int f = int(fr + .5); return texelFetch(nvatTex, ivec2(v % ${meta.W}, f * ${meta.rows} + v / ${meta.W}), 0).xyz * 2. - 1.; }`)
+        .replace('#include <beginnormal_vertex>', 'vec3 objectNormal = normalize(mix(nvatFetch(iAnim.x), nvatFetch(iAnim.y), iAnim.z));')
+        .replace('#include <color_vertex>', '#include <color_vertex>\nvFlash = iFx.y;');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vFlash;')
+        .replace('#include <map_fragment>', `#include <map_fragment>
+      diffuseColor.rgb = vFlash >= 0. ? mix(diffuseColor.rgb, vec3(1., .82, .78), vFlash) : mix(diffuseColor.rgb, vec3(.045, .038, .032), -vFlash); // hit flash / charred`);
+    }
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
 uniform highp sampler2D vatTex;
@@ -494,7 +516,10 @@ vColor.rgb = iFx.y >= 0. ? mix(vColor.rgb, vec3(1., .82, .78), iFx.y) : mix(vCol
       outgoingLight += vec3(.55, .68, .9) * rim * .55;   // cool sky rim light separates characters from the road
       #include <opaque_fragment>`);
   };
+  // the shaders inline this model's texture layout, so models must not share a compiled program
+  const layoutKey = `vat-${meta.W}-${meta.rows}-${textured ? 'tex' : 'col'}`; mat.customProgramCacheKey = () => layoutKey;
   const depthMat = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, side: opts.gore ? THREE.DoubleSide : THREE.FrontSide });
+  depthMat.customProgramCacheKey = () => layoutKey;
   depthMat.onBeforeCompile = sh => {
     sh.uniforms.vatTex = { value: tex };
     sh.vertexShader = sh.vertexShader
@@ -526,6 +551,7 @@ function flushInst(R) {
   R.iAnim.needsUpdate = true; R.iTint.needsUpdate = true; R.iFx.needsUpdate = true; R.n = 0;
 }
 let SOLD = null, ZOMB = null;
+const ZMODELS = { walker: [], brute: [], boss: [] }; let ZALL = []; // textured zombie models by type (models/zombies.json); empty = the classic zombie
 function mergeGeos(list) { // tiny merge for non-indexed position/normal geometries
   const parts = list.map(g => g.index ? g.toNonIndexed() : g); let n = 0; for (const g of parts) n += g.attributes.position.count;
   const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3); let o = 0;
@@ -1282,7 +1308,8 @@ function makeZombie(x, z, type) {
   const L = G ? G.L : 1;
   const T = type === 'boss' ? { hp: G.bossHp, s: 4.4, spd: 1.25 } : type === 'brute' ? { hp: 14 + L * 5, s: 1.75, spd: rand(1.1, 1.5) } : { hp: 2 + L * .55, s: rand(.92, 1.08), spd: rand(1.3, 2.1) + L * .04 };
   return { x, z, type, hp: T.hp, maxHp: T.hp, s: T.s, spd: T.spd, phase: rand(0, TAU), flash: 0, dying: 0, bites: type === 'brute' ? 3 : 1,
-    skin: new THREE.Color('#7f9a6e'), shirt: type === 'boss' ? BOSS_TINT : type === 'brute' ? BRUTE_TINT : pick(SHIRTS), yaw: Math.PI, idle: !!(G && G.preview), attack: false };
+    skin: new THREE.Color('#7f9a6e'), shirt: type === 'boss' ? BOSS_TINT : type === 'brute' ? BRUTE_TINT : pick(SHIRTS), yaw: Math.PI, idle: !!(G && G.preview), attack: false,
+    model: (ZMODELS[type] && ZMODELS[type].length) ? pick(ZMODELS[type]) : (ZMODELS.walker.length ? pick(ZMODELS.walker) : ZOMB) };
 }
 function spawnHorde(h) {
   h.spawned = true;
@@ -1724,10 +1751,10 @@ function sync(dt) {
     else if (z.attack) { clip = 'punch'; at = z.phase * (z.type === 'boss' ? .12 : .25); }
     else { clip = z.spd > 1.85 ? 'run' : 'walk'; at = z.phase / (clip === 'run' ? 6 : 4.5); }
     const flash = z.char > 0 ? -z.char * .92 : z.flash > 0 ? (z.type === 'boss' ? .22 : .38) : frozen ? .3 : 0;
-    pushInst(ZOMB, z.x, (z.lift || 0) - sink, z.z, z.yaw, sc, clip, at, z.shirt, 0, flash, z.mask || 0, z.tilt || 0);
+    pushInst(z.model || ZOMB, z.x, (z.lift || 0) - sink, z.z, z.yaw, sc, clip, at, z.shirt, 0, flash, z.mask || 0, z.tilt || 0);
     if (!z.dying || z.dying < 1.3) pushBlob(z.x, z.z, sc * .55);
   }
-  flushInst(ZOMB);
+  flushInst(ZOMB); for (const R of ZALL) flushInst(R);
   // flying body parts
   for (const m of gibMeshes) if (m) m.n = 0;
   for (const p of gibs) {
@@ -1840,7 +1867,7 @@ function refreshSound() { const t = 'SOUND: ' + (soundOn ? 'ON' : 'OFF'); $('sou
   const g = 'GRAPHICS: ' + (hiQ ? 'HIGH' : 'LOW'); $('gfxBtn').textContent = g; $('gfxBtn2').textContent = g; }
 function setQuality(high) { // LOW: no bloom/post, no character shadows, smaller shadow map, lower resolution
   hiQ = high; store.set('gfx', high ? 'high' : 'low');
-  if (SOLD) SOLD.mesh.castShadow = high; if (ZOMB) ZOMB.mesh.castShadow = high; for (const m of gibMeshes) if (m) m.mesh.castShadow = high;
+  if (SOLD) SOLD.mesh.castShadow = high; if (ZOMB) ZOMB.mesh.castShadow = high; for (const R of ZALL) R.mesh.castShadow = high; for (const m of gibMeshes) if (m) m.mesh.castShadow = high;
   sun.shadow.mapSize.set(high ? 2048 : 1024, high ? 2048 : 1024); if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
   resize(); refreshSound();
 }
@@ -1910,10 +1937,20 @@ function frame(now) {
 }
 buildComposer(); resize();
 $('playBtn').disabled = true; $('playBtn').textContent = 'LOADING…';
-Promise.all([document.fonts ? document.fonts.load('40px Bungee').catch(() => {}) : 0, loadVAT('soldier', MAXS + MAXFALLEN), loadVAT('zombie', MAXZ, { gore: true }), fetch('models/zombie-gibs.json').then(r => r.json())]).then(([, s, z, gibData]) => {
-  SOLD = s; ZOMB = z; buildGibs(gibData); $('playBtn').disabled = false; goMenu(); requestAnimationFrame(frame);
+// textured zombies listed in models/zombies.json, e.g. {"walker": ["wwzombie"], "brute": ["mutant"], "boss": ["mutant"], "gibs": "wwzombie"}
+async function loadZombieModels() {
+  let list; try { list = await (await fetch('models/zombies.json')).json(); } catch (e) { return null; }
+  const names = [...new Set([...(list.walker || []), ...(list.brute || []), ...(list.boss || [])])], byName = {};
+  await Promise.all(names.map(n => loadVAT(n, MAXZ, { gore: true }).then(R => { byName[n] = R; }).catch(e => console.warn('zombie model', n, e))));
+  for (const t of ['walker', 'brute', 'boss']) ZMODELS[t] = (list[t] || []).map(n => byName[n]).filter(Boolean);
+  ZALL = Object.values(byName);
+  if (!ZALL.length) return null;
+  try { return await (await fetch(`models/${list.gibs || names[0]}-gibs.json`)).json(); } catch (e) { return null; }
+}
+Promise.all([document.fonts ? document.fonts.load('40px Bungee').catch(() => {}) : 0, loadVAT('soldier', MAXS + MAXFALLEN), loadVAT('zombie', MAXZ, { gore: true }), fetch('models/zombie-gibs.json').then(r => r.json()), loadZombieModels()]).then(([, s, z, gibData, texGibs]) => {
+  SOLD = s; ZOMB = z; buildGibs(texGibs || gibData); $('playBtn').disabled = false; goMenu(); requestAnimationFrame(frame);
 }).catch(err => { $('playBtn').textContent = 'COULD NOT LOAD MODELS'; console.error(err); });
-window.__dt = { info: (hide) => { const g = []; if (hide) scene.traverse(o => { if (o.isInstancedMesh && o !== SOLD.mesh && o !== ZOMB.mesh && o.visible) { o.visible = false; g.push(o); } }); renderer.render(scene, camera); const r = { tris: renderer.info.render.triangles, calls: renderer.info.render.calls }; g.forEach(o => o.visible = true); return r; }, mk: (x, z, t = 'walker') => makeZombie(x, z, t), audio: () => ({ ctx: AC && AC.state, loaded: Object.keys(buffers).length, voices }), camera, THREE, get G() { return G; }, get state() { return state; }, start: startLevel, setTheme, step(dt) { if (state === 'play') update(dt); }, sync, render: () => (hiQ && composer ? composer.render() : renderer.render(scene, camera)), save, persist };
+window.__dt = { info: (hide) => { const g = []; if (hide) scene.traverse(o => { if (o.isInstancedMesh && o !== SOLD.mesh && o !== ZOMB.mesh && !ZALL.some(R => R.mesh === o) && o.visible) { o.visible = false; g.push(o); } }); renderer.render(scene, camera); const r = { tris: renderer.info.render.triangles, calls: renderer.info.render.calls }; g.forEach(o => o.visible = true); return r; }, mk: (x, z, t = 'walker') => makeZombie(x, z, t), audio: () => ({ ctx: AC && AC.state, loaded: Object.keys(buffers).length, voices }), camera, THREE, get G() { return G; }, get state() { return state; }, start: startLevel, setTheme, step(dt) { if (state === 'play') update(dt); }, sync, render: () => (hiQ && composer ? composer.render() : renderer.render(scene, camera)), save, persist };
 </script>
 </body>
 </html>
