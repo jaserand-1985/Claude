@@ -1433,10 +1433,29 @@ function spawnHorde(h) {
   h.spawned = true;
   // hordes scale with the squad you actually have, so every horde is a real fight
   const first = G.hordes.indexOf(h) === 0 ? .7 : 1;
-  const want = Math.round((G.soldiers.length * rand(.9, 1.2) * (1 + G.L * .05) + G.L + 2) * first);
-  const n = clamp(want, 6, MAXZ - G.zombies.length - 8), depth = 2 + n * .09;
-  for (let i = 0; i < n; i++) G.zombies.push(makeZombie(rand(-HALF + .6, HALF - .6), h.z - rand(0, depth), 'walker'));
-  for (let i = 0; i < h.brutes; i++) G.zombies.push(makeZombie(rand(-2.5, 2.5), h.z - depth - rand(.5, 2), 'brute'));
+  const want = Math.round((G.soldiers.length * rand(.9, 1.2) * (1 + G.L * .05) + G.L + 2) * first * 1.15); // a spread-out mob is easier to hit than a single file, so it comes a little bigger
+  const n = clamp(want, 6, MAXZ - G.zombies.length - 8);
+  // the horde comes as a few big clumps spread across the road, each a loose mob that moves together
+  const nc = n < 14 ? 1 : n < 36 ? (Math.random() < .5 ? 1 : 2) : n < 80 ? 2 + (Math.random() < .4) : 3, clumps = [];
+  for (let k = 0; k < nc; k++) {
+    const lane = nc === 1 ? rand(-1.2, 1.2) : -HALF + 1.4 + (k + rand(.3, .7)) / nc * (ROAD_W - 2.8);
+    clumps.push({ x: lane, z: h.z - rand(0, 2 + n * .04), spd: rand(1.35, 2.05) + G.L * .04, m: 0 });
+  }
+  for (let i = 0; i < n; i++) clumps[Math.floor(Math.random() * nc)].m++;
+  h.clumps = clumps;
+  for (const c of clumps) {
+    const rx = clamp(.55 + Math.sqrt(c.m) * .28, .8, 2.6) * (nc > 2 ? .8 : 1), rz = clamp(.6 + Math.sqrt(c.m) * .3, 1, 3.6);
+    for (let i = 0; i < c.m; i++) {
+      const a = Math.random() * TAU, r = Math.sqrt(Math.random()); // even fill of an ellipse, a little denser in the middle
+      const ox = Math.cos(a) * r * rx, oz = Math.sin(a) * r * rz * (.75 + .25 * r);
+      const zb = makeZombie(clamp(c.x + ox, -HALF + .4, HALF - .4), c.z + oz, 'walker');
+      zb.grp = c; zb.ox = ox; zb.spd = c.spd * rand(.94, 1.06); G.zombies.push(zb);
+    }
+  }
+  for (let i = 0; i < h.brutes; i++) { // brutes lumber along at the back of a clump
+    const c = clumps[i % nc], zb = makeZombie(clamp(c.x + rand(-1, 1), -HALF + .6, HALF - .6), c.z - rand(2.5, 4.5), 'brute');
+    zb.grp = c; zb.ox = zb.x - c.x; G.zombies.push(zb);
+  }
 }
 // cause: 'bullet' | 'blast' | 'contact'; (fx, fz) = where the hit came from
 function hurtZombie(z, dmg, cause = 'bullet', fx = z.x, fz = z.z + 5, hitY = 0) {
@@ -1744,6 +1763,7 @@ function update(dt) {
 
   // zombies
   const slow = G.pw.freeze > 0 ? .28 : 1;
+  for (const h of G.hordes) if (h.clumps) for (const c of h.clumps) c.x = clamp(c.x + clamp((G.sx - c.x) * .3, -.55, .55) * dt * slow, -HALF + 1.2, HALF - 1.2);
   for (const z of G.zombies) {
     if (z.dying) {
       z.dying += dt;
@@ -1763,10 +1783,21 @@ function update(dt) {
     const dx = G.sx - z.x, dz = G.sz - z.z;
     let spd = z.spd * slow * (z.hitT > 0 ? .35 : 1);
     if (z.type === 'boss' && G.phase === 'run') spd = 0;
-    z.x = clamp(z.x + clamp(dx * .5, -1.1, 1.1) * dt * slow * (z.type === 'boss' ? .3 : 1), -HALF + .4, HALF - .4);
+    let vx;
+    if (z.grp) { // part of a clump: keep its place in the mob, and only close in on the squad over the last few metres
+      const c = z.grp, near = clamp((9 - dz) / 7, 0, 1);
+      const tx = (c.x + z.ox) * (1 - near) + (G.sx + z.ox * clamp((G.R + .5) / 2.2, .25, .9)) * near;
+      vx = clamp((tx - z.x) * 1.4, -1.3, 1.3) * slow;
+      // shoulder room: walkers push apart sideways instead of stacking up in one file
+      const k0 = Math.floor(z.z);
+      for (let k = k0 - 1; k <= k0 + 1; k++) { const a = buckets.get(k); if (!a) continue;
+        for (const o of a) { if (o === z || o.dying) continue; const ex = z.x - o.x, ez = z.z - o.z, rr = .34 * (z.s + o.s); const d2 = ex * ex + ez * ez;
+          if (d2 < rr * rr) { const d = Math.sqrt(d2) || .01, push = (rr - d) / rr; vx += (ex / d || (Math.random() - .5)) * push * 3; z.z += (ez / d) * push * dt * 1.5; } } }
+    } else vx = clamp(dx * .5, -1.1, 1.1) * slow * (z.type === 'boss' ? .3 : 1);
+    z.x = clamp(z.x + vx * dt, -HALF + .4, HALF - .4);
     z.z += spd * dt;
     z.phase += dt * (3 + spd * 2.2);
-    z.yaw = Math.atan2(-(dx * .5), -Math.max(.5, dz));
+    z.yaw = Math.atan2(-clamp(vx, -1.1, 1.1), -Math.max(.5, z.grp ? spd + .5 : dz));
     if (z.type === 'boss') {
       z.attack = z.z > G.sz - G.R - 4;
       if (z.z > G.sz - G.R - 2.6) {
@@ -2049,7 +2080,7 @@ function setQuality(high) { // LOW: no bloom/post, no character shadows, smaller
   resize(); refreshSound();
 }
 function goMenu() {
-  state = 'menu'; ['hud', 'pause', 'win', 'lose', 'hint'].forEach(i => show(i, false)); show('menu', true); $('bossbar').hidden = true;
+  state = 'menu'; ['hud', 'pause', 'win', 'lose', 'hint'].forEach(i => show(i, false)); clearTimeout(bannerTO); $('banner').classList.remove('on'); // no leftover power-up banner over the menu show('menu', true); $('bossbar').hidden = true;
   newGame(save.level, true); renderMenu();
 }
 async function startLevel() {
@@ -2138,7 +2169,7 @@ async function loadZombieModels() {
 Promise.all([document.fonts ? document.fonts.load('40px Bungee').catch(() => {}) : 0, loadTroops(), loadVAT('zombie', MAXZ, { gore: true }), fetch('models/zombie-gibs.json').then(r => r.json()), loadZombieModels()]).then(([, s, z, gibData, texGibs]) => {
   SOLD = s; ZOMB = z; buildGibs(texGibs || gibData); $('playBtn').disabled = false; goMenu(); requestAnimationFrame(frame);
 }).catch(err => { $('playBtn').textContent = 'COULD NOT LOAD MODELS'; console.error(err); });
-window.__dt = { info: (hide) => { const g = []; if (hide) scene.traverse(o => { if (o.isInstancedMesh && o !== SOLD.mesh && !(HEROM && o === HEROM.mesh) && o !== ZOMB.mesh && !ZALL.some(R => R.mesh === o) && o.visible) { o.visible = false; g.push(o); } }); renderer.render(scene, camera); const r = { tris: renderer.info.render.triangles, calls: renderer.info.render.calls }; g.forEach(o => o.visible = true); return r; }, mk: (x, z, t = 'walker') => makeZombie(x, z, t), audio: () => ({ ctx: AC && AC.state, loaded: Object.keys(buffers).length, voices }), camera, THREE, get G() { return G; }, get state() { return state; }, start: startLevel, power: t => applyPower(t), setTheme, step(dt) { if (state === 'play') update(dt); }, sync, render: () => (hiQ && composer ? composer.render() : renderer.render(scene, camera)), save, persist };
+window.__dt = { info: (hide) => { const g = []; if (hide) scene.traverse(o => { if (o.isInstancedMesh && o !== SOLD.mesh && !(HEROM && o === HEROM.mesh) && o !== ZOMB.mesh && !ZALL.some(R => R.mesh === o) && o.visible) { o.visible = false; g.push(o); } }); renderer.render(scene, camera); const r = { tris: renderer.info.render.triangles, calls: renderer.info.render.calls }; g.forEach(o => o.visible = true); return r; }, mk: (x, z, t = 'walker') => makeZombie(x, z, t), audio: () => ({ ctx: AC && AC.state, loaded: Object.keys(buffers).length, voices }), camera, THREE, get G() { return G; }, get state() { return state; }, start: startLevel, power: t => applyPower(t), setTheme, step(dt) { if (state === 'play') update(dt); }, tick(dt, draw) { if (state === 'play') update(dt); sync(state === 'paused' ? 0 : dt); updateHud(); updateFloats(state === 'paused' ? 0 : dt); if (draw) (hiQ && composer ? composer.render() : renderer.render(scene, camera)); }, get gore() { return goreOn; }, sync, render: () => (hiQ && composer ? composer.render() : renderer.render(scene, camera)), save, persist };
 </script>
 </body>
 </html>

@@ -58,6 +58,7 @@ Power-ups come two ways. **Crates** stand on the road: shoot one until its numbe
 - The squad marches at a steadier pace, and **holds its ground** when a brute gets within a few metres, fighting it out before moving on. A "HOLD!" call shows the first time.
 - **Brutes draw the fire.** When a brute is in range, the squad leader and about two thirds of the squad aim at it; the rest keep shooting the nearest walkers.
 - Soldiers lost show as a red count rising over the squad.
+- **Hordes come as mobs.** Each horde is one to three big clumps spread across the road. A clump moves as a crowd, with walkers shouldering each other aside, and only closes in on the squad over the last few metres, so zombies never line up single file.
 
 ### Armory upgrades
 
@@ -104,6 +105,17 @@ node tools/bake/run-bake.js   # writes www/models/*.bin and *.json
 - **Hits and gore:** zombies flinch and get knocked back when shot (the model's own hit-reaction animation). Kills can take the head or an arm off: the bake splits the zombie mesh into head, arms, legs and torso by bone, so the part disappears from the body (whose insides render red) and a real chunk of the model tumbles away, bounces and bleeds. Explosions blow walkers apart and throw brutes. Blood is glossy droplets that fall and stain the road, splatter decals with streaks, and pools that spread under the bodies.
 - **Lighting:** image-based lighting from the sky, real-time shadows from every character, a rim light on characters, HDR bloom, MSAA and a colour grade with vignette.
 - **Graphics setting:** HIGH or LOW in the menu and pause screen. On first play, the game drops to LOW automatically if HIGH runs below about 40 fps.
+
+## Automated playtest
+
+Headless playthroughs that catch errors and broken game state (Playwright with Chromium):
+
+```sh
+(cd www && python3 -m http.server 8790) &
+node tools/playtest/playtest.js 1 12 /tmp/playtest   # plays levels 1-12 with an autopilot
+node tools/playtest/scenarios.js /tmp/playtest       # each weapon, every power-up, gore off, LOW graphics, losing, pause and quit, all five maps, level 25
+node tools/playtest/shot.js 4 /tmp/horde.png 13 nofire   # screenshot of a horde 13 m out
+```
 
 ## Build the APK yourself
 
