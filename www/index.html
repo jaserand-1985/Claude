@@ -1523,7 +1523,7 @@ function killSoldier(idx) {
 const zScale = z => ZBASE * z.s * ((z.model && z.model.scale) || 1); // world size of a zombie, including its model's own scale
 function makeZombie(x, z, type) {
   const L = G ? G.L : 1;
-  const BT = type === 'boss' ? bossFor(L) : null, T = BT ? { hp: G.bossHp, s: Math.min(7, 4.4 * BT.size * (1 + Math.min(.6, (L - 1) * .06))), spd: BT.spd } /* tougher bosses on later levels are bigger too */ : type === 'brute' ? { hp: 14 + L * 5, s: 1.75, spd: rand(1.1, 1.5) } : { hp: 4 + L * 1.5 + L * L * .03, s: rand(.92, 1.08), spd: rand(1.3, 2.1) + L * .06 } /* tougher and quicker every level */;
+  const BT = type === 'boss' ? bossFor(L) : null, T = BT ? { hp: G.bossHp, s: Math.min(7, 4.4 * BT.size * (1 + Math.min(.6, (L - 1) * .06))), spd: BT.spd } /* tougher bosses on later levels are bigger too */ : type === 'brute' ? { hp: 14 + L * 5, s: 1.75, spd: rand(1.1, 1.5) } : { hp: (4 + L * 1.5 + L * L * .03) * Math.min(1, .55 + L * .15) /* levels 1 and 2 go easy */, s: rand(.92, 1.08), spd: rand(1.3, 2.1) + L * .06 } /* tougher and quicker every level */;
   return { x, z, type, hp: T.hp, maxHp: T.hp, s: T.s, spd: T.spd, phase: rand(0, TAU), flash: 0, dying: 0, bites: type === 'brute' ? 3 : 1,
     skin: new THREE.Color('#7f9a6e'), shirt: type === 'boss' ? BOSS_TINT : type === 'brute' ? BRUTE_TINT : pick(SHIRTS), yaw: Math.PI, idle: !!(G && G.preview), attack: false,
     bt: BT, model: BT && ZBYNAME[BT.model] ? ZBYNAME[BT.model] : (ZMODELS[type] && ZMODELS[type].length) ? pick(ZMODELS[type]) : (ZMODELS.walker.length ? pick(ZMODELS.walker) : ZOMB) };
@@ -1532,7 +1532,7 @@ function spawnHorde(h) {
   h.spawned = true;
   // hordes scale with the squad you actually have, so every horde is a real fight
   const hi = G.hordes.indexOf(h), first = hi === 0 ? .55 : hi === 1 ? .8 : 1; // the first two hordes ease you in
-  const want = Math.round((G.soldiers.length * rand(.9, 1.2) * (1.6 + G.L * .12) + G.L * 2 + 4) * first * 1.15); // a spread-out mob is easier to hit than a single file, so it comes a little bigger
+  const want = Math.round((G.soldiers.length * rand(.9, 1.2) * (1.6 + G.L * .12) + G.L * 2 + 4) * first * 1.15 * (G.L === 1 ? .75 : G.L === 2 ? .88 : 1)); // a spread-out mob is easier to hit than a single file, so it comes a little bigger
   const n = clamp(want, 6, MAXZ - G.zombies.length - 8);
   // the horde comes as a few big clumps spread across the road, each a loose mob that moves together
   const nc = n < 14 ? 1 : n < 36 ? (Math.random() < .5 ? 1 : 2) : n < 80 ? 2 + (Math.random() < .4) : 3, clumps = [];
@@ -1944,7 +1944,7 @@ function update(dt) {
   for (const h of G.hordes) if (!h.spawned && h.z > G.sz - 72) spawnHorde(h);
   if (!G.bossSpawned && G.sz < -G.len + 70) {
     G.bossSpawned = true;
-    G.bossHp = Math.round(30 * Math.max(8, G.soldiers.length) * G.st.dmg * (G.st.rate / 3.4) * (1 + G.L * .06) * bossFor(G.L).hp * ({ rocket: .75, flamer: .8 }[G.weapon] || 1) * (fpsOn ? 2.4 : 1)); // first person: a longer fight, and your own aim decides how long // rockets and flamers do less to one big target
+    G.bossHp = Math.round(30 * Math.max(8, G.soldiers.length) * G.st.dmg * (G.st.rate / 3.4) * (1 + G.L * .06) * bossFor(G.L).hp * (G.L === 1 ? .7 : 1) * ({ rocket: .75, flamer: .8 }[G.weapon] || 1) * (fpsOn ? (G.L <= 2 ? 1.6 : 2.4) : 1)); // rockets and flamers do less to one big target; first person makes a longer fight that your own aim shortens (gentler on the first two levels)
     // supply drop: if the squad's gun is wrong for this boss, or the squad is thin, a crate lands in its lane before the fight
     { const B = bossFor(G.L), poor = G.weapon === 'flamer' || (G.weapon !== 'rocket' && (B.res.bullet || 0) >= .3), thin = G.soldiers.length < Math.min(90, 10 + G.L * 6);
       if (poor || thin) { const dc = makeCrate(clamp(G.sx, -3, 3), G.sz - 16, poor ? 'w_rocket' : 'recruit', Math.round(8 + G.L * 2)); dc.smart = true; G.crates.push(dc); floatText('SUPPLY DROP!', G.sx, 3.4, G.sz - 16, POWER[dc.type].col, 24); } }
@@ -1978,6 +1978,8 @@ function update(dt) {
   const crateT = G.phase === 'run' ? G.crates.find(c => !c.dead && G.sz - c.z > 1 && G.sz - c.z < RANGE) : null; // nearest crate ahead
   const bigT = G.phase === 'run' ? bigThreat(RANGE * .85) : null; // brutes draw the fire: the hero and most of the squad aim at them
   let fired = 0, heroFired = false;
+  // aim assist: soldiers spread their fire over the closest walkers ahead, so a mob off to one side still gets shot
+  const near = G.phase === 'run' ? G.zombies.filter(z => !z.dying && z.type !== 'boss' && G.sz - z.z > 1 && G.sz - z.z < RANGE).sort((a, b) => b.z - a.z).slice(0, 24) : [];
   for (const s of G.soldiers) {
     s.ox += (s.tx - s.ox) * Math.min(1, dt * 6); s.oz += (s.tz - s.oz) * Math.min(1, dt * 6);
     s.pop = Math.min(1, s.pop + dt * 3);
@@ -1987,7 +1989,7 @@ function update(dt) {
       s.cd += 1 / st.rate * rand(.85, 1.15);
       if (s.hero && G.fps && G.fps.k > .5) continue; // in first person the player fires the leader's minigun
       if (target && (s.hero || Math.random() < p)) {
-        const [x, z] = soldierWorld(s), sc = s.hero ? 1.45 : 1, aim = G.boss && !G.boss.dying && G.phase === 'boss' ? G.boss : bigT && (s.hero || s.ab < .65) ? bigT : crateT && Math.abs(crateT.x - x) < 2.6 ? crateT : null; // soldiers near a crate's lane aim at it
+        const [x, z] = soldierWorld(s), sc = s.hero ? 1.45 : 1, aim = G.boss && !G.boss.dying && G.phase === 'boss' ? G.boss : bigT && (s.hero || s.ab < .65) ? bigT : crateT && Math.abs(crateT.x - x) < 2.6 ? crateT : near.length ? near[Math.floor(s.ab * near.length)] : null; // soldiers near a crate's lane aim at it
         if (s.hero || wk === 'rifle') fire(x + .05 * sc, z - .7 * sc, s.hero ? st.dmg * 1.5 : st.dmg / p, s.hero, aim);
         else if (wk === 'shotgun') { for (let k = 0; k < 5; k++) addBullet(x + .05, z - .7, rand(-.2, .2) + (aim ? clamp(Math.atan2(aim.x - x, Math.max(2, z - aim.z)), -.45, .45) : 0), st.dmg * .95 / p, false, false, 'pellet', 21); }
         else if (wk === 'rocket') addRocket(x + .05, z - .8, target, st.dmg * 2.2 / p);
