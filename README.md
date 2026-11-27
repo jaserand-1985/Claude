@@ -8,7 +8,7 @@ A 3D zombie lane shooter for Android phones. Your squad charges down a road thro
 - **Shoot:** automatic. Every soldier fires forward; your squad leader carries a minigun.
 - **Gates:** each gate has two halves. Blue halves add or multiply soldiers (`+8`, `×2`); red halves remove or divide them (`−6`, `÷2`). You pass through whichever half you are lined up with. Shooting an add/subtract half raises its number, so a red gate can be turned blue.
 - **Zombies:** every zombie that reaches your squad takes a soldier with it. Brutes (big and purple) take three. If your whole squad falls, the run is over.
-- **Boss:** at the end of the bridge your squad stops and the boss walks in. Its stomps knock out soldiers, so kill it fast.
+- **Boss:** at the end of every level your squad stops and the boss walks in. Its stomps knock out soldiers, so kill it fast.
 - **Armory:** coins from kills, survivors and bosses buy permanent upgrades between levels.
 
 ### Maps
@@ -53,6 +53,25 @@ Power-ups come two ways. **Crates** stand on the road: shoot one until its numbe
 | Salvage Magnet | 4 | token | Crates up to 25 m ahead break open by themselves for 6 seconds |
 | Gate Boost | 5 | token | The next blue gate counts twice (`+10` gives 20, `×2` becomes `×3`); gates ahead get a gold rim |
 | Sentry Gun | 6 | crate | An auto-turret rolls beside the squad for 9 seconds and fires at the biggest zombie in range |
+
+### Bosses
+
+Each level ends with one of six bosses, in turn. Later levels make every boss bigger and tougher.
+
+| Boss | Skin | Size | Health | Speed | Resists |
+| --- | --- | --- | --- | --- | --- |
+| Rotfather | Mutant | normal | normal | slow | nothing |
+| Mother Maggot | Zombie Girl | small | low | very fast | nothing |
+| The Warden | Prisoner | normal | normal | fast | bullets a little |
+| The Pumpkin King | Pumpkin Hulk | big | high | slow | fire (60%) |
+| Iron Grunt | WW zombie | big | high | normal | bullets (40%) and fire; rockets hit it harder |
+| Gutmouth | Ch10 | huge | very high | very slow | bullets a little |
+
+### Fair power-ups
+
+- **Crates pick what you need.** A crate decides what it holds as it comes into view: reinforcements when the squad is short for the level, damage, rapid fire, shield or spread shot when it is a bit short, and rockets near the end if your gun is wrong for the boss (flamers are too short-ranged; armoured bosses shrug off bullets).
+- **Supply drop before the boss.** If the squad has the wrong gun for the boss or is too thin, a crate lands in its lane just before the fight.
+- **Backup after a loss.** Each failed try at a level (up to three) adds backup soldiers at the start of the next try, and crates lean toward reinforcements. Beating the level resets it.
 
 ### Fighting the horde
 

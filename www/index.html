@@ -171,7 +171,7 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('deadtide2.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem('deadtide2.' + k, JSON.stringify(v)); } catch (e) {} }
 };
-const save = { seen: store.get('seen', []), weapon: store.get('weapon', 'rifle'), map: store.get('map', 'auto'), level: store.get('level', 1), coins: store.get('coins', 0), up: Object.assign({ dmg: 0, rate: 0, men: 0, coin: 0 }, store.get('up', {})) };
+const save = { fails: store.get('fails', {}), seen: store.get('seen', []), weapon: store.get('weapon', 'rifle'), map: store.get('map', 'auto'), level: store.get('level', 1), coins: store.get('coins', 0), up: Object.assign({ dmg: 0, rate: 0, men: 0, coin: 0 }, store.get('up', {})) };
 function persist() { store.set('weapon', save.weapon); store.set('map', save.map); store.set('level', save.level); store.set('coins', save.coins); store.set('up', save.up); }
 
 /* ================= audio: recorded CC0 samples (see audio/CREDITS.md) ================= */
@@ -574,7 +574,7 @@ function flushInst(R) {
   R.iAnim.needsUpdate = true; R.iTint.needsUpdate = true; R.iFx.needsUpdate = true; R.n = 0;
 }
 let SOLD = null, ZOMB = null, HEROM = null; // HEROM: the hero's own model, when models/troops.json names one
-const ZMODELS = { walker: [], brute: [], boss: [] }; let ZALL = []; // textured zombie models by type (models/zombies.json); empty = the classic zombie
+const ZMODELS = { walker: [], brute: [], boss: [] }; let ZALL = [], ZBYNAME = {}; // textured zombie models by type (models/zombies.json); empty = the classic zombie
 function mergeGeos(list) { // tiny merge for non-indexed position/normal geometries
   const parts = list.map(g => g.index ? g.toNonIndexed() : g); let n = 0; for (const g of parts) n += g.attributes.position.count;
   const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3); let o = 0;
@@ -1326,7 +1326,17 @@ function disposeObj(o) { scene.remove(o); o.traverse(n => { if (n.geometry) n.ge
 
 /* ================= game state ================= */
 let state = 'menu', G = null;
-const BOSS_NAMES = ['ROTFATHER', 'THE BRIDGE TROLL', 'GUTMOUTH', 'OLD CRUSHER', 'THE BLOATED KING', 'MOTHER MAGGOT'];
+// boss types, one per level in turn: each wears a different skin, with its own size, health, speed and resistances
+// res: share of damage shrugged off per cause (negative = weak spot); stomp: soldiers knocked out per stomp, relative
+const BOSSES = [
+  { name: 'ROTFATHER', model: 'mutant', size: 1, hp: 1, spd: 1.25, stomp: 1, res: {}, tag: '' },
+  { name: 'MOTHER MAGGOT', model: 'zombiegirl', size: .78, hp: .75, spd: 2.3, stomp: .7, res: {}, tag: 'SMALL BUT FAST' },
+  { name: 'THE WARDEN', model: 'prisoner', size: .9, hp: .95, spd: 1.8, stomp: .9, res: { bullet: .2 }, tag: 'FAST, TOUGH SKIN' },
+  { name: 'THE PUMPKIN KING', model: 'pumpkinhulk', size: 1.2, hp: 1.3, spd: 1.1, stomp: 1.2, res: { fire: .6 }, tag: 'FIREPROOF' },
+  { name: 'IRON GRUNT', model: 'wwzombie', size: 1.1, hp: 1.15, spd: 1.3, stomp: 1, res: { bullet: .4, fire: .2, blast: -.3 }, tag: 'ARMORED: ROCKETS HIT HARD' },
+  { name: 'GUTMOUTH', model: 'ch10', size: 1.3, hp: 1.45, spd: .95, stomp: 1.3, res: { bullet: .15 }, tag: 'HUGE' }
+];
+const bossFor = L => BOSSES[(L - 1) % BOSSES.length];
 const stats = () => ({ dmg: Math.pow(1.2, save.up.dmg), rate: 3.4 * Math.pow(1.1, save.up.rate), men: 3 + save.up.men, coin: 1 + .25 * save.up.coin });
 
 function newGame(L, preview = false) {
@@ -1336,7 +1346,9 @@ function newGame(L, preview = false) {
   G = { L, preview, st, t: 0, sx: 0, tx: 0, sz: 0, speed: 5.4, vel: 5.4, halt: false, phase: 'run', len: Math.min(560, 230 + L * 26), R: 1,
     soldiers: [], fallen: [], zombies: [], bullets: [], gates: [], crates: [], tokens: [], hordes: [], boss: null, bossSpawned: false, bossHp: 300,
     pw: { rapid: 0, spread: 0, shield: 0, freeze: 0, power: 0, sprint: 0, magnet: 0, double: 0, turret: 0 }, magT: 0, turT: 0, lossAcc: 0, lossT: 0, weapon: weaponUnlocked(save.weapon || 'rifle') ? (save.weapon || 'rifle') : 'rifle', rockets: [], flaming: false, strikes: [], kills: 0, coinsRun: 0, shake: 0, hurt: 0, doneT: 0, bubblePop: 0, shotN: 0, stompT: 0 };
-  for (let i = 0; i < st.men; i++) addSoldier(true);
+  // failed this level before? backup joins at the start (up to three retries' worth), and crates lean helpful
+  G.help = preview ? 0 : Math.min(3, save.fails[L] || 0); G.backup = G.help * (2 + Math.ceil(L / 2));
+  for (let i = 0; i < st.men + G.backup; i++) addSoldier(true);
   layoutSquad(true);
   if (!preview) genLevel(L);
   else for (let i = 0; i < 40; i++) G.zombies.push(makeZombie(rand(-3.6, 3.6), -26 - rand(0, 14), 'walker'));
@@ -1425,15 +1437,15 @@ function killSoldier(idx) {
 const zScale = z => ZBASE * z.s * ((z.model && z.model.scale) || 1); // world size of a zombie, including its model's own scale
 function makeZombie(x, z, type) {
   const L = G ? G.L : 1;
-  const T = type === 'boss' ? { hp: G.bossHp, s: 4.4 * (1 + Math.min(.6, (L - 1) * .06)), spd: 1.25 } /* tougher bosses on later levels are bigger too */ : type === 'brute' ? { hp: 14 + L * 5, s: 1.75, spd: rand(1.1, 1.5) } : { hp: 4 + L * 1.5 + L * L * .03, s: rand(.92, 1.08), spd: rand(1.3, 2.1) + L * .06 } /* tougher and quicker every level */;
+  const BT = type === 'boss' ? bossFor(L) : null, T = BT ? { hp: G.bossHp, s: Math.min(7, 4.4 * BT.size * (1 + Math.min(.6, (L - 1) * .06))), spd: BT.spd } /* tougher bosses on later levels are bigger too */ : type === 'brute' ? { hp: 14 + L * 5, s: 1.75, spd: rand(1.1, 1.5) } : { hp: 4 + L * 1.5 + L * L * .03, s: rand(.92, 1.08), spd: rand(1.3, 2.1) + L * .06 } /* tougher and quicker every level */;
   return { x, z, type, hp: T.hp, maxHp: T.hp, s: T.s, spd: T.spd, phase: rand(0, TAU), flash: 0, dying: 0, bites: type === 'brute' ? 3 : 1,
     skin: new THREE.Color('#7f9a6e'), shirt: type === 'boss' ? BOSS_TINT : type === 'brute' ? BRUTE_TINT : pick(SHIRTS), yaw: Math.PI, idle: !!(G && G.preview), attack: false,
-    model: (ZMODELS[type] && ZMODELS[type].length) ? pick(ZMODELS[type]) : (ZMODELS.walker.length ? pick(ZMODELS.walker) : ZOMB) };
+    bt: BT, model: BT && ZBYNAME[BT.model] ? ZBYNAME[BT.model] : (ZMODELS[type] && ZMODELS[type].length) ? pick(ZMODELS[type]) : (ZMODELS.walker.length ? pick(ZMODELS.walker) : ZOMB) };
 }
 function spawnHorde(h) {
   h.spawned = true;
   // hordes scale with the squad you actually have, so every horde is a real fight
-  const first = G.hordes.indexOf(h) === 0 ? .7 : 1;
+  const hi = G.hordes.indexOf(h), first = hi === 0 ? .55 : hi === 1 ? .8 : 1; // the first two hordes ease you in
   const want = Math.round((G.soldiers.length * rand(.9, 1.2) * (1.6 + G.L * .12) + G.L * 2 + 4) * first * 1.15); // a spread-out mob is easier to hit than a single file, so it comes a little bigger
   const n = clamp(want, 6, MAXZ - G.zombies.length - 8);
   // the horde comes as a few big clumps spread across the road, each a loose mob that moves together
@@ -1462,6 +1474,7 @@ function spawnHorde(h) {
 function hurtZombie(z, dmg, cause = 'bullet', fx = z.x, fz = z.z + 5, hitY = 0) {
   if (z.dying || !z.shirt) return;
   if (G.pw.power > 0 && cause !== 'contact') dmg *= 2;
+  if (z.bt && z.bt.res[cause]) dmg *= 1 - z.bt.res[cause];
   z.hp -= dmg; z.flash = .06;
   if (z.hp <= 0) { killZombie(z, cause, fx, fz, hitY); return; }
   if (z.type !== 'boss' && z.flinch <= 0) { // stagger: play the hit reaction and get knocked back a step
@@ -1605,6 +1618,18 @@ function takeToken(k) {
   flashes.add(k.x, 1.2, k.z, 0, 0, 0, .35, col); addRing(k.x, k.z, 3.4, POWER[k.type].col, .55); addRing(G.sx, G.sz, G.R + 2.5, POWER[k.type].col, .6);
   disposeToken(k); applyPower(k.type);
 }
+// crates decide what they hold as they come into view, from what the squad needs to get through this level
+function smartCrate(c) {
+  const L = G.L, n = G.soldiers.length, B = bossFor(L), wk = G.weapon, target = Math.min(110, 10 + L * 7), late = c.z < -G.len * .62;
+  const ok = k => POWER[k].unlock <= L;
+  // the right gun for the boss: flamers are too short-ranged for it, and armoured bosses shrug off bullets
+  const poor = w => w === 'flamer' || (w !== 'rocket' && (B.res.bullet || 0) >= .3);
+  if (late && (poor(wk) || (c.type.startsWith('w_') && poor(c.type.slice(2))))) return 'w_rocket';
+  if (c.type.startsWith('w_')) return null; // keep the level's heavy weapon
+  if (n < target * .6 || (G.help && n < target * 1.2 && Math.random() < .5)) return 'recruit';
+  if (n < target && Math.random() < .6) return pick(['power', 'rapid', 'shield', 'spread'].filter(ok));
+  return null;
+}
 function crateBreak(c) {
   c.dead = true; sfx.crate();
   const col = new THREE.Color(POWER[c.type].col);
@@ -1661,16 +1686,19 @@ function update(dt) {
     G.vel += (want - G.vel) * (1 - Math.exp(-dt * (want < G.vel ? 7 : 3)));
     G.sz -= G.vel * dt;
     if (sprint && Math.random() < dt * 40) sparks.add(G.sx + rand(-4.5, 4.5), rand(.3, 2.6), G.sz - rand(3, 10), 0, 1.2, 22, .22, C.white);
-    if (G.sz <= -G.len) { G.sz = -G.len; G.phase = 'boss'; banner('BOSS!', BOSS_NAMES[(G.L - 1) % BOSS_NAMES.length], 1800, '#ff6a5a'); sfx.roar(); $('bossbar').hidden = false; }
+    if (G.sz <= -G.len) { G.sz = -G.len; G.phase = 'boss'; { const B = bossFor(G.L); banner(B.name, B.tag || 'BOSS!', 2200, '#ff6a5a'); } sfx.roar(); $('bossbar').hidden = false; }
   }
   if (G.phase === 'done') { G.doneT -= dt; if (G.doneT <= 0) { levelWin(); return; } }
 
   for (const h of G.hordes) if (!h.spawned && h.z > G.sz - 72) spawnHorde(h);
   if (!G.bossSpawned && G.sz < -G.len + 70) {
     G.bossSpawned = true;
-    G.bossHp = Math.round(30 * Math.max(8, G.soldiers.length) * G.st.dmg * (G.st.rate / 3.4) * (1 + G.L * .06));
+    G.bossHp = Math.round(30 * Math.max(8, G.soldiers.length) * G.st.dmg * (G.st.rate / 3.4) * (1 + G.L * .06) * bossFor(G.L).hp * ({ rocket: .75, flamer: .8 }[G.weapon] || 1)); // rockets and flamers do less to one big target
+    // supply drop: if the squad's gun is wrong for this boss, or the squad is thin, a crate lands in its lane before the fight
+    { const B = bossFor(G.L), poor = G.weapon === 'flamer' || (G.weapon !== 'rocket' && (B.res.bullet || 0) >= .3), thin = G.soldiers.length < Math.min(90, 10 + G.L * 6);
+      if (poor || thin) { const dc = makeCrate(clamp(G.sx, -3, 3), G.sz - 16, poor ? 'w_rocket' : 'recruit', Math.round(8 + G.L * 2)); dc.smart = true; G.crates.push(dc); floatText('SUPPLY DROP!', G.sx, 3.4, G.sz - 16, POWER[dc.type].col, 24); } }
     G.boss = makeZombie(0, -G.len - 30, 'boss'); G.zombies.push(G.boss);
-    $('bossName').textContent = BOSS_NAMES[(G.L - 1) % BOSS_NAMES.length];
+    $('bossName').textContent = bossFor(G.L).name;
   }
 
   for (const k in G.pw) if (G.pw[k] > 0) { G.pw[k] = Math.max(0, G.pw[k] - dt); if (G.pw[k] === 0 && k !== 'double') sfx.expire(); }
@@ -1806,7 +1834,7 @@ function update(dt) {
         if (G.stompT <= 0) {
           G.stompT = .9; G.shake = Math.max(G.shake, .7); sfx.stomp(); addRing(z.x, z.z + 1.5, 4.5, '#ff8a5a', .5); explosion(z.x, .2, z.z + 1.6, 1.5);
           if (G.pw.shield > 0) G.pw.shield = Math.max(0, G.pw.shield - 2);
-          else for (let i = 0; i < 2 + Math.floor(G.L / 3) && G.soldiers.length; i++) killSoldier(Math.floor(Math.random() * G.soldiers.length));
+          else for (let i = 0, n = Math.max(1, Math.round((2 + Math.floor(G.L / 3)) * z.bt.stomp)); i < n && G.soldiers.length; i++) killSoldier(Math.floor(Math.random() * G.soldiers.length));
         }
       }
       continue;
@@ -1847,6 +1875,7 @@ function update(dt) {
   // crates
   for (const c of G.crates) {
     if (c.dead) continue;
+    if (!c.smart && c.z > G.sz - 45) { c.smart = true; const t = smartCrate(c); if (t && t !== c.type) { c.type = t; c.halo.material.color.set(POWER[t].col); drawCrate(c); } }
     c.flash = Math.max(0, c.flash - dt);
     const tick = G.t * 12 | 0; if (c.dirty && tick !== c.lastDraw) { c.dirty = 0; c.lastDraw = tick; drawCrate(c); }
     const f = c.flash > 0 ? .6 : 0; c.mesh.material.emissive.setRGB(f, f, f);
@@ -2090,7 +2119,7 @@ async function startLevel() {
   $('bossbar').hidden = true; for (const k in chipEls) chipEls[k].hidden = true;
   newGame(save.level); $('hudLv').textContent = 'LEVEL ' + save.level; lastCoins = -1; updateWeaponChip();
   state = 'play'; drag.on = false;
-  banner('LEVEL ' + save.level, THEMES[themeFor(save.level)].name, 1600);
+  banner('LEVEL ' + save.level, G.backup ? 'BACKUP ARRIVED: +' + G.backup + ' SOLDIERS' : THEMES[themeFor(save.level)].name, G.backup ? 2200 : 1600, G.backup ? '#5ee07a' : '');
   requestWake();
 }
 function togglePause() {
@@ -2100,13 +2129,13 @@ function togglePause() {
 function levelWin() {
   state = 'win'; flameLoop(false); sfx.win();
   const surv = G.soldiers.length; G.coinsRun += Math.round(surv * 2 * G.st.coin);
-  const earned = Math.floor(G.coinsRun); save.coins += earned; save.level++; persist();
+  const earned = Math.floor(G.coinsRun); save.coins += earned; delete save.fails[G.L]; store.set('fails', save.fails); save.level++; persist();
   $('winTitle').textContent = 'LEVEL ' + G.L + ' CLEARED'; $('wKills').textContent = G.kills; $('wSurv').textContent = surv; $('wCoins').textContent = '+' + earned;
   show('hud', false); show('hint', false); show('win', true);
 }
 function levelLose() {
   if (state !== 'play') return;
-  state = 'lose'; flameLoop(false); sfx.lose();
+  state = 'lose'; flameLoop(false); sfx.lose(); save.fails[G.L] = (save.fails[G.L] || 0) + 1; store.set('fails', save.fails);
   const earned = Math.floor(G.coinsRun); save.coins += earned; persist();
   $('lKills').textContent = G.kills; $('lDist').textContent = Math.round(clamp(-G.sz / G.len, 0, 1) * 100) + '%'; $('lCoins').textContent = '+' + earned;
   $('loseTip').textContent = pick(['Tip: shoot red gates to raise their number before you pass through.', 'Tip: spend coins in the Armory between levels.', 'Tip: steer in line with crates so your squad shoots them open.', 'Tip: ×2 gates are worth more when your squad is big.']);
@@ -2162,7 +2191,7 @@ async function loadZombieModels() {
   const names = [...new Set([...(list.walker || []), ...(list.brute || []), ...(list.boss || [])])], byName = {};
   await Promise.all(names.map(n => loadVAT(n, MAXZ, { gore: true }).then(R => { byName[n] = R; }).catch(e => console.warn('zombie model', n, e))));
   for (const t of ['walker', 'brute', 'boss']) ZMODELS[t] = (list[t] || []).map(n => byName[n]).filter(Boolean);
-  ZALL = Object.values(byName);
+  ZALL = Object.values(byName); ZBYNAME = byName;
   for (const [n, R] of Object.entries(byName)) R.scale = (list.scale && list.scale[n]) || list.scale && list.scale.all || 1; // realistic proportions read smaller than the chunky soldiers
   if (!ZALL.length) return null;
   try { return await (await fetch(`models/${list.gibs || names[0]}-gibs.json`)).json(); } catch (e) { return null; }
