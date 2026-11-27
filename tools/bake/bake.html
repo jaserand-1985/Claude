@@ -5,6 +5,9 @@ import * as THREE from 'three';
 import { GLTFLoader } from './lib/GLTFLoader.js';
 const W = 2048, FPS = 15;
 const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
+// limb axes for thickening bare bones: [bone, child bone, radial scale, max radius as a fraction of height]
+const AXES = { LowerLegL: ['LowerLegL', 'FootL', 3.4, .034], LowerLegR: ['LowerLegR', 'FootR', 3.4, .034], LowerArmL: ['LowerArmL', 'FistL', 2.6, .026], LowerArmR: ['LowerArmR', 'FistR', 2.6, .026] };
+const _d = new THREE.Vector3(), _r = new THREE.Vector3(), _c = new THREE.Vector3();
 
 // simple low-poly guns built from boxes/cylinders, merged with per-vertex colours
 function gunParts() {
@@ -85,6 +88,44 @@ async function bake(url, clipSpec, opts) {
   const box = new THREE.Box3(); const v = new THREE.Vector3();
   for (const e of verts) { e.m.getVertexPosition(e.i, v); v.applyMatrix4(e.m.matrixWorld); box.expandByPoint(v); }
   const h = box.max.y - box.min.y, cx = (box.min.x + box.max.x) / 2, cz = (box.min.z + box.max.z) / 2;
+  // limbs (zombie): the source model's shins and forearms are bare bone sticks with a tiny foot block, which read as
+  // pogo sticks from the game camera. Thicken the bone sticks into rotted flesh and add real feet with toes.
+  const thick = new Map(), feet = [];
+  if (opts.limbs) {
+    const flesh = new THREE.Color(opts.limbs.flesh).convertLinearToSRGB();
+    for (const m of meshes) {
+      if (m.material.name !== 'Bones') continue;
+      const si = m.geometry.attributes.skinIndex, sw = m.geometry.attributes.skinWeight;
+      verts.forEach((e, vi) => {
+        if (e.m !== m) return; let best = 0, bw = -1; for (let k = 0; k < 4; k++) { const w = sw.getComponent(e.i, k); if (w > bw) { bw = w; best = si.getComponent(e.i, k); } }
+        const ax = AXES[m.skeleton.bones[best].name]; if (!ax) return;
+        thick.set(vi, ax); col[vi * 3] = flesh.r * 255 | 0; col[vi * 3 + 1] = flesh.g * 255 | 0; col[vi * 3 + 2] = flesh.b * 255 | 0;
+      });
+    }
+    // a bare foot: tapered sole block plus five toes, built in bind pose around the foot bone and moved rigidly with it
+    const skin = new THREE.Color(opts.limbs.skin).convertLinearToSRGB(), nail = new THREE.Color(opts.limbs.nail).convertLinearToSRGB();
+    for (const [bn, side] of [['FootL', 1], ['FootR', -1]]) {
+      const bp = new THREE.Vector3(); bones[bn].getWorldPosition(bp);
+      const parts = [], S = h * opts.limbs.footScale; // sizes below are fractions of the character's height
+      const add = (geo, c, x, y, z) => { geo = geo.toNonIndexed(); geo.translate(x, y, z); geo.scale(S, S, S); parts.push({ geo, c }); };
+      const sole = new THREE.BoxGeometry(.046, .028, .074); const sp = sole.attributes.position;
+      for (let i = 0; i < sp.count; i++) if (sp.getZ(i) > 0 && sp.getY(i) > 0) sp.setY(i, sp.getY(i) - .014); // slope the top down toward the toes
+      add(sole, skin, 0, .014, .012);
+      const toes = [[.0115, .013, .016], [.0085, .011, .014], [.008, .010, .013], [.0075, .009, .012], [.007, .008, .011]]; // big toe first
+      let tx = -side * .019;
+      for (const [w, th, len] of toes) {
+        tx += side * w / 2;
+        add(new THREE.BoxGeometry(w * .9, th, len), skin, tx, th / 2, .049 + len / 2 - .002);
+        add(new THREE.BoxGeometry(w * .62, .002, len * .38), nail, tx, th + .001, .049 + len - .004);
+        tx += side * w / 2 + side * .0008;
+      }
+      const inv = bones[bn].matrixWorld.clone().invert(), base = V;
+      const geo = { pos: [], base, bone: bn, inv };
+      for (const p of parts) { const pa = p.geo.attributes.position;
+        for (let i = 0; i < pa.count; i++) { v.fromBufferAttribute(pa, i); geo.pos.push(v.x + bp.x, v.y + box.min.y, v.z + bp.z); col.push(p.c.r * 255 | 0, p.c.g * 255 | 0, p.c.b * 255 | 0); tint.push(0); part.push(0); group.push(side > 0 ? 4 : 5); idx.push(V++); } }
+      feet.push(geo);
+    }
+  }
   const norm = new THREE.Matrix4().makeRotationY(Math.PI).multiply(new THREE.Matrix4().makeScale(1 / h, 1 / h, 1 / h)).multiply(new THREE.Matrix4().makeTranslation(-cx, -box.min.y, -cz));
   // region recolour (e.g. one 'Skin' material that covers face, gloves and boots)
   if (opts.region) verts.forEach((e, vi) => {
@@ -120,7 +161,18 @@ async function bake(url, clipSpec, opts) {
       const fbase = (info.start + f) * rows * W;
       const put = (vi, p) => { const o = (fbase + vi) * 4; data[o] = THREE.DataUtils.toHalfFloat(p.x); data[o + 1] = THREE.DataUtils.toHalfFloat(p.y); data[o + 2] = THREE.DataUtils.toHalfFloat(p.z); data[o + 3] = 15360; };
       for (const m of meshes) m.skeleton.update();
-      verts.forEach((e, vi) => { e.m.getVertexPosition(e.i, v); v.applyMatrix4(e.m.matrixWorld).applyMatrix4(norm); put(vi, v); });
+      const ends = {}; if (thick.size) for (const [a, b] of Object.values(AXES)) { ends[a] = bones[a].getWorldPosition(new THREE.Vector3()); ends[b] = bones[b].getWorldPosition(new THREE.Vector3()); }
+      verts.forEach((e, vi) => {
+        e.m.getVertexPosition(e.i, v); v.applyMatrix4(e.m.matrixWorld);
+        const ax = thick.get(vi);
+        if (ax) { // push the vertex out from the limb's axis
+          const a = ends[ax[0]], b = ends[ax[1]], ab = _d.subVectors(b, a), t = THREE.MathUtils.clamp(_r.subVectors(v, a).dot(ab) / ab.lengthSq(), 0, 1);
+          const c = _c.copy(a).addScaledVector(ab, t), r = _r.subVectors(v, c), len = r.length();
+          if (len > 1e-6) v.copy(c).addScaledVector(r, Math.min(len * ax[2], ax[3] * h) / len);
+        }
+        v.applyMatrix4(norm); put(vi, v);
+      });
+      for (const ft of feet) { gm.multiplyMatrices(bones[ft.bone].matrixWorld, ft.inv); for (let i = 0; i < ft.pos.length / 3; i++) { v.fromArray(ft.pos, i * 3).applyMatrix4(gm).applyMatrix4(norm); put(ft.base + i, v); } }
       if (guns.length) {
         // grip at the right fist, pointing along the character's forward axis, tilted down a touch
         bones['FistR'].getWorldPosition(hand).applyMatrix4(norm); bones['FistL'].getWorldPosition(handL).applyMatrix4(norm);
@@ -139,7 +191,7 @@ function b64(u8) { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += 
 window.runBake = async () => {
   const out = {};
   const S = await bake('models/Soldier_Male.glb', [['Run_Carry', 'run', true], ['Walk_Carry', 'walk', true], ['Death', 'death', false], ['Victory', 'victory', true]], { tint: ['Main'], guns: true, gunScale: 1.0, colors: { Skin: '#d49a70', Black: '#2b2d30', DarkGreen: '#4d5a32', Helmet: '#56653a' }, region: { Skin: { below: .6, color: '#2f3134' } } });
-  const Z = await bake('models/Zombie_Male.glb', [['Walk_Carry', 'walk', true], ['Run_Carry', 'run', true], ['Punch', 'punch', true], ['Death', 'death', false], ['RecieveHit', 'hit', false]], { tint: ['Clothes'], guns: false, gibs: true, colors: { Skin: '#86a86a', Face: '#2a1414', DarkClothes: '#2f2a38' } });
+  const Z = await bake('models/Zombie_Male.glb', [['Walk_Carry', 'walk', true], ['Run_Carry', 'run', true], ['Punch', 'punch', true], ['Death', 'death', false], ['RecieveHit', 'hit', false]], { tint: ['Clothes'], guns: false, gibs: true, colors: { Skin: '#86a86a', Face: '#2a1414', DarkClothes: '#2f2a38' }, limbs: { flesh: '#6f8a58', skin: '#86a86a', nail: '#3a3020', footScale: 1.5 } });
   for (const [k, r] of Object.entries({ soldier: S, zombie: Z })) {
     // pack: idx(u32) | col(u8*3) | tint(u8) | part(u8) | group(u8) | pad to 4 | vat(u16)
     const parts = [new Uint8Array(r.idx.buffer), r.col, r.tint, r.part, r.group];
