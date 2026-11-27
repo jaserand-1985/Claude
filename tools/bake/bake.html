@@ -1,0 +1,154 @@
+<!doctype html><meta charset="utf-8">
+<script type="importmap">{"imports":{"three":"../../www/lib/three.module.min.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from './lib/GLTFLoader.js';
+const W = 2048, FPS = 15;
+const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
+
+// simple low-poly guns built from boxes/cylinders, merged with per-vertex colours
+function gunParts() {
+  const parts = [];
+  const SC = { 1: .82, 2: .62, 3: .78, 4: .82, 5: .74 };
+  const add = (geo, color, part, m) => { geo = geo.toNonIndexed(); geo.applyMatrix4(m || new THREE.Matrix4()); geo.scale(SC[part], SC[part], SC[part]); parts.push({ geo, color: new THREE.Color(color), part }); };
+  const T = (x, y, z, rx = 0) => new THREE.Matrix4().makeRotationX(rx).setPosition(x, y, z);
+  // rifle (part 1): along -Z, origin at grip
+  add(new THREE.BoxGeometry(.05, .07, .5), '#2a2c30', 1, T(0, 0, -.12));
+  add(new THREE.BoxGeometry(.045, .1, .16), '#5a4127', 1, T(0, -.03, .17));
+  add(new THREE.BoxGeometry(.035, .08, .06), '#2a2c30', 1, T(0, -.07, -.04));
+  add(new THREE.CylinderGeometry(.012, .012, .2, 6).rotateX(Math.PI / 2), '#1b1c1f', 1, T(0, .01, -.46));
+  add(new THREE.BoxGeometry(.03, .03, .1), '#1b1c1f', 1, T(0, .055, -.1));
+  // minigun (part 2)
+  add(new THREE.CylinderGeometry(.06, .07, .22, 10).rotateX(Math.PI / 2), '#3d3f45', 2, T(0, 0, 0));
+  for (let i = 0; i < 6; i++) { const a = i * Math.PI / 3; add(new THREE.CylinderGeometry(.016, .016, .5, 6).rotateX(Math.PI / 2), '#e8b23a', 2, T(Math.cos(a) * .04, Math.sin(a) * .04, -.34)); }
+  add(new THREE.TorusGeometry(.05, .012, 6, 12), '#e8b23a', 2, T(0, 0, -.55));
+  add(new THREE.BoxGeometry(.1, .12, .14), '#2a2c30', 2, T(0, -.09, .08));
+  const cyl = (r1, r2, len, seg = 10) => new THREE.CylinderGeometry(r1, r2, len, seg).rotateX(Math.PI / 2);
+  // rocket launcher (part 3): olive tube with a warhead poking out the front
+  add(cyl(.065, .065, .9, 12), '#4f5b34', 3, T(0, .07, -.12));
+  add(cyl(.08, .065, .12, 12), '#3a4226', 3, T(0, .07, .36));
+  add(cyl(.05, .055, .14, 10), '#6b6f74', 3, T(0, .07, -.62));
+  add(new THREE.ConeGeometry(.05, .14, 10).rotateX(-Math.PI / 2), '#8a2a18', 3, T(0, .07, -.76));
+  add(new THREE.BoxGeometry(.04, .1, .06), '#2a2c30', 3, T(0, -.03, -.02));
+  add(new THREE.BoxGeometry(.05, .06, .12), '#2a2c30', 3, T(-.08, .12, -.18));
+  // shotgun (part 4): heavy barrel, wooden pump and stock
+  add(cyl(.024, .024, .62, 8), '#26282b', 4, T(0, .03, -.28));
+  add(cyl(.02, .02, .5, 8), '#26282b', 4, T(0, -.015, -.24));
+  add(new THREE.BoxGeometry(.06, .06, .18), '#7a5230', 4, T(0, -.01, -.3));
+  add(new THREE.BoxGeometry(.06, .09, .2), '#2e3034', 4, T(0, .02, .02));
+  add(new THREE.BoxGeometry(.05, .11, .24), '#6b4528', 4, T(0, -.03, .22));
+  // flamethrower (part 5): nozzle, body and a red fuel tank underneath
+  add(cyl(.03, .04, .42, 10), '#3a3c40', 5, T(0, .04, -.3));
+  add(cyl(.045, .045, .05, 10), '#ff8a1f', 5, T(0, .04, -.52));
+  add(new THREE.BoxGeometry(.08, .1, .22), '#2e3034', 5, T(0, .02, -.02));
+  add(cyl(.07, .07, .34, 12), '#a8321e', 5, T(0, -.1, .02));
+  add(cyl(.072, .072, .03, 12), '#d8d2c4', 5, T(0, -.1, -.08));
+  return parts;
+}
+
+async function bake(url, clipSpec, opts) {
+  const gltf = await new GLTFLoader().loadAsync(url);
+  const root = gltf.scene; root.updateMatrixWorld(true);
+  const meshes = []; root.traverse(o => { if (o.isSkinnedMesh) meshes.push(o); });
+  const bones = {}; root.traverse(o => { if (o.isBone) bones[o.name] = o; });
+  // geometry assembly. Every triangle belongs to one body part (0 torso, 1 head, 2/3 arms, 4/5 legs) so a part can be
+  // hidden cleanly; vertices on a seam are duplicated once per part that uses them.
+  const GROUP = { Head: 1, ShoulderL: 2, UpperArmL: 2, LowerArmL: 2, FistL: 2, ShoulderR: 3, UpperArmR: 3, LowerArmR: 3, FistR: 3, UpperLegL: 4, LowerLegL: 4, FootL: 4, UpperLegR: 5, LowerLegR: 5, FootR: 5 };
+  const verts = []; let V = 0; const idx = [], col = [], tint = [], part = [], group = [], tris = [];
+  for (const m of meshes) {
+    const g = m.geometry, n = g.attributes.position.count, ov = (opts.colors || {})[m.material.name], c = (ov ? new THREE.Color(ov) : m.material.color.clone()).convertLinearToSRGB();
+    const tintable = opts.tint.includes(m.material.name) ? 1 : 0, si = g.attributes.skinIndex, sw = g.attributes.skinWeight;
+    const vg = new Array(n);
+    for (let i = 0; i < n; i++) { let best = 0, bw = -1; for (let k = 0; k < 4; k++) { const w = sw.getComponent(i, k); if (w > bw) { bw = w; best = si.getComponent(i, k); } } vg[i] = GROUP[m.skeleton.bones[best].name] || 0; }
+    const ix = g.index ? g.index.array : [...Array(n).keys()];
+    const map = new Map();
+    for (let t = 0; t < ix.length; t += 3) {
+      const a = vg[ix[t]], b = vg[ix[t + 1]], d = vg[ix[t + 2]], grp = (a === b || a === d) ? a : (b === d ? b : 0);
+      const tri = [];
+      for (let k = 0; k < 3; k++) {
+        const key = ix[t + k] * 8 + grp; let ni = map.get(key);
+        if (ni === undefined) { ni = V++; map.set(key, ni); verts.push({ m, i: ix[t + k] }); col.push(c.r * 255 | 0, c.g * 255 | 0, c.b * 255 | 0); tint.push(tintable); part.push(0); group.push(grp); }
+        idx.push(ni); tri.push(ni);
+      }
+      tris.push({ v: tri, grp });
+    }
+  }
+  const srcVerts = [{ list: verts }];
+  const guns = opts.guns ? gunParts() : [];
+  const gunBase = V;
+  for (const gp of guns) {
+    const n = gp.geo.attributes.position.count; const c = gp.color.clone();
+    for (let i = 0; i < n; i++) { col.push(c.r * 255 | 0, c.g * 255 | 0, c.b * 255 | 0); tint.push(0); part.push(gp.part); group.push(0); idx.push(V + i); }
+    gp.base = V; V += n;
+  }
+  // normalisation from bind pose (height -> 1, feet at 0, centred), facing -Z
+  const box = new THREE.Box3(); const v = new THREE.Vector3();
+  for (const e of verts) { e.m.getVertexPosition(e.i, v); v.applyMatrix4(e.m.matrixWorld); box.expandByPoint(v); }
+  const h = box.max.y - box.min.y, cx = (box.min.x + box.max.x) / 2, cz = (box.min.z + box.max.z) / 2;
+  const norm = new THREE.Matrix4().makeRotationY(Math.PI).multiply(new THREE.Matrix4().makeScale(1 / h, 1 / h, 1 / h)).multiply(new THREE.Matrix4().makeTranslation(-cx, -box.min.y, -cz));
+  // region recolour (e.g. one 'Skin' material that covers face, gloves and boots)
+  if (opts.region) verts.forEach((e, vi) => {
+    const rule = opts.region[e.m.material.name]; if (!rule) return;
+    e.m.getVertexPosition(e.i, v); v.applyMatrix4(e.m.matrixWorld).applyMatrix4(norm);
+    if (v.y < rule.below) { const c = new THREE.Color(rule.color).convertLinearToSRGB(); const k = vi * 3; col[k] = c.r * 255 | 0; col[k + 1] = c.g * 255 | 0; col[k + 2] = c.b * 255 | 0; }
+  });
+  // body-part chunks ("gibs") in bind pose, each centred on its own middle, for dismemberment
+  const gibs = [];
+  if (opts.gibs) for (let g = 0; g <= 5; g++) {
+    const pos = [], c8 = [], t8 = [], ctr = new THREE.Vector3(); let n = 0;
+    for (const t of tris) if (t.grp === g) for (const vi of t.v) { const e = verts[vi]; e.m.getVertexPosition(e.i, v); v.applyMatrix4(e.m.matrixWorld).applyMatrix4(norm); pos.push(v.x, v.y, v.z); ctr.add(v); n++; c8.push(col[vi * 3], col[vi * 3 + 1], col[vi * 3 + 2]); t8.push(tint[vi]); }
+    ctr.divideScalar(Math.max(1, n));
+    for (let k = 0; k < pos.length; k += 3) { pos[k] -= ctr.x; pos[k + 1] -= ctr.y; pos[k + 2] -= ctr.z; }
+    gibs.push({ g, center: [ctr.x, ctr.y, ctr.z].map(x => +x.toFixed(4)), pos: b64(new Uint8Array(new Float32Array(pos).buffer)), col: b64(new Uint8Array(c8)), tint: b64(new Uint8Array(t8)), count: n });
+  }
+  // clips
+  const mixer = new THREE.AnimationMixer(root);
+  const rows = Math.ceil(V / W);
+  const clips = {}; let frameTotal = 0;
+  for (const [name, as, loop] of clipSpec) {
+    const clip = gltf.animations.find(a => a.name === name); const frames = Math.max(2, Math.round(clip.duration * FPS) + (loop ? 0 : 1));
+    clips[as] = { start: frameTotal, frames, dur: clip.duration, loop }; frameTotal += frames;
+  }
+  const data = new Uint16Array(W * rows * frameTotal * 4);
+  const hand = new THREE.Vector3(), handL = new THREE.Vector3(), q = new THREE.Quaternion(), gm = new THREE.Matrix4();
+  for (const [name, as, loop] of clipSpec) {
+    const clip = gltf.animations.find(a => a.name === name), info = clips[as];
+    mixer.stopAllAction(); const act = mixer.clipAction(clip); act.reset(); act.setLoop(THREE.LoopRepeat); act.play();
+    for (let f = 0; f < info.frames; f++) {
+      const t = loop ? f / info.frames * clip.duration : Math.min(clip.duration - 1e-4, f / (info.frames - 1) * clip.duration);
+      mixer.setTime(t); root.updateMatrixWorld(true);
+      const fbase = (info.start + f) * rows * W;
+      const put = (vi, p) => { const o = (fbase + vi) * 4; data[o] = THREE.DataUtils.toHalfFloat(p.x); data[o + 1] = THREE.DataUtils.toHalfFloat(p.y); data[o + 2] = THREE.DataUtils.toHalfFloat(p.z); data[o + 3] = 15360; };
+      for (const m of meshes) m.skeleton.update();
+      verts.forEach((e, vi) => { e.m.getVertexPosition(e.i, v); v.applyMatrix4(e.m.matrixWorld).applyMatrix4(norm); put(vi, v); });
+      if (guns.length) {
+        // grip at the right fist, pointing along the character's forward axis, tilted down a touch
+        bones['FistR'].getWorldPosition(hand).applyMatrix4(norm); bones['FistL'].getWorldPosition(handL).applyMatrix4(norm);
+        const mid = hand.clone().lerp(handL, .5);
+        const carry = as.startsWith('run') || as.startsWith('walk') || as === 'idle';
+        const pos = carry ? mid.add(V3(0.0, .02, .02)) : hand;
+        gm.compose(pos, q.setFromEuler(new THREE.Euler(carry ? -.05 : 0, 0, 0)), V3(1 / 1.0, 1, 1).multiplyScalar(opts.gunScale));
+        for (const gp of guns) { const pa = gp.geo.attributes.position; for (let i = 0; i < pa.count; i++) { v.fromBufferAttribute(pa, i).applyMatrix4(gm); put(gp.base + i, v); } }
+      }
+    }
+  }
+  return { meta: { V, W, rows, fps: FPS, frames: frameTotal, indexCount: idx.length, clips, gunBase },
+    idx: new Uint32Array(idx), col: new Uint8Array(col), tint: new Uint8Array(tint), part: new Uint8Array(part), group: new Uint8Array(group), vat: data, gibs };
+}
+function b64(u8) { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); }
+window.runBake = async () => {
+  const out = {};
+  const S = await bake('models/Soldier_Male.glb', [['Run_Carry', 'run', true], ['Walk_Carry', 'walk', true], ['Death', 'death', false], ['Victory', 'victory', true]], { tint: ['Main'], guns: true, gunScale: 1.0, colors: { Skin: '#d49a70', Black: '#2b2d30', DarkGreen: '#4d5a32', Helmet: '#56653a' }, region: { Skin: { below: .6, color: '#2f3134' } } });
+  const Z = await bake('models/Zombie_Male.glb', [['Walk_Carry', 'walk', true], ['Run_Carry', 'run', true], ['Punch', 'punch', true], ['Death', 'death', false], ['RecieveHit', 'hit', false]], { tint: ['Clothes'], guns: false, gibs: true, colors: { Skin: '#86a86a', Face: '#2a1414', DarkClothes: '#2f2a38' } });
+  for (const [k, r] of Object.entries({ soldier: S, zombie: Z })) {
+    // pack: idx(u32) | col(u8*3) | tint(u8) | part(u8) | group(u8) | pad to 4 | vat(u16)
+    const parts = [new Uint8Array(r.idx.buffer), r.col, r.tint, r.part, r.group];
+    let len = parts.reduce((a, p) => a + p.length, 0); const pad = (4 - len % 4) % 4; len += pad;
+    const buf = new Uint8Array(len + r.vat.byteLength); let o = 0;
+    const offs = {}; ['idx', 'col', 'tint', 'part', 'group'].forEach((n, i) => { offs[n] = o; buf.set(parts[i], o); o += parts[i].length; }); o += pad; offs.vat = o; buf.set(new Uint8Array(r.vat.buffer), o);
+    out[k] = { meta: Object.assign(r.meta, { offs }), b64: b64(buf), gibs: r.gibs };
+  }
+  return out;
+};
+window.ready = true;
+</script>

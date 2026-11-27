@@ -1,0 +1,57 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: ["**"]
+    paths: ["www/**", "android/**", "package.json", "capacitor.config.json", ".github/workflows/android.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Capacitor and copy the game into the Android project
+        run: |
+          npm install --no-audit --no-fund
+          npx cap sync android
+
+      - name: Build debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk ../DeadTide.apk
+
+      - name: Upload APK as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeadTide-apk
+          path: DeadTide.apk
+
+      - name: Publish APK to the "latest" release (direct download link)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-${{ github.ref_name }}
+          name: Dead Tide (${{ github.ref_name }})
+          prerelease: true
+          make_latest: false
+          files: DeadTide.apk
+          body: |
+            Open this page on your Android phone, tap **DeadTide.apk** to download it, then open the file to install.
+            Android will ask you to allow installs from your browser the first time.

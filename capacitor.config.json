@@ -1,0 +1,9 @@
+{
+  "appId": "com.deadtide.game",
+  "appName": "Dead Tide",
+  "webDir": "www",
+  "backgroundColor": "#14171a",
+  "android": {
+    "backgroundColor": "#14171a"
+  }
+}

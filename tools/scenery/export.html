@@ -1,0 +1,57 @@
+<!doctype html><meta charset="utf-8">
+<!-- Converts Quaternius CC0 scenery (glTF/OBJ) into small, phone-friendly GLBs:
+     drops hidden interiors, normal/ORM maps, shrinks textures, re-exports as binary glTF. -->
+<script type="importmap">{"imports":{"three":"../../www/lib/three.module.min.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from '../bake/lib/GLTFLoader.js';
+import { GLTFExporter } from './lib/GLTFExporter.js';
+import { OBJLoader } from './lib/OBJLoader.js';
+import { MTLLoader } from './lib/MTLLoader.js';
+const DROP = /Interior|FakeInterior|Asphalt/; // rooms behind the windows and the slab under each building are never seen
+
+function shrink(tex, max, jpeg) {
+  const img = tex.image, s = Math.min(1, max / Math.max(img.width, img.height));
+  const c = document.createElement('canvas'); c.width = Math.max(4, Math.round(img.width * s)); c.height = Math.max(4, Math.round(img.height * s));
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  const t = new THREE.Texture(c); t.flipY = tex.flipY; t.wrapS = tex.wrapS; t.wrapT = tex.wrapT; t.colorSpace = tex.colorSpace; t.needsUpdate = true;
+  t.userData.mimeType = jpeg ? 'image/jpeg' : 'image/png'; return t;
+}
+async function load(src) {
+  if (src.endsWith('.obj')) {
+    const base = src.slice(0, src.lastIndexOf('/') + 1), name = src.slice(src.lastIndexOf('/') + 1, -4);
+    const mtl = await new MTLLoader().setPath(base).loadAsync(name + '.mtl'); mtl.preload();
+    return await new OBJLoader().setMaterials(mtl).setPath(base).loadAsync(name + '.obj');
+  }
+  return (await new GLTFLoader().loadAsync(src)).scene;
+}
+window.convert = async (jobs, texMax) => {
+  const out = {};
+  for (const job of jobs) {
+    const root = await load(job.src); const drop = [];
+    root.traverse(o => {
+      if (!o.isMesh) return;
+      const ms = [].concat(o.material);
+      if (ms.every(m => DROP.test(m.name || ''))) { drop.push(o); return; }
+      o.material = ms.map(m => {
+        const alpha = !!(m.map && /Leaves|Grass|Fern|Bush|Leaf/i.test(m.name + (m.map.name || '')));
+        const n = new THREE.MeshStandardMaterial({ name: m.name, color: m.color, roughness: Math.max(.55, m.roughness ?? .8), metalness: Math.min(.3, m.metalness ?? 0), side: alpha ? THREE.DoubleSide : THREE.FrontSide });
+        if (/Glass/.test(m.name)) { n.color = new THREE.Color('#2c4a66'); n.roughness = .15; n.metalness = .6; }
+        if (m.map) { n.map = shrink(m.map, texMax, !alpha); if (alpha) { n.alphaTest = .5; n.transparent = false; } }
+        if (m.vertexColors) n.vertexColors = true;
+        return n;
+      });
+      if (o.material.length === 1) o.material = o.material[0];
+    });
+    drop.forEach(o => o.parent.remove(o));
+    root.traverse(o => { if (!o.isMesh) return; const g = o.geometry; for (const k of ['tangent', 'uv1', 'uv2', 'uv3', 'color']) if (g.attributes[k] && !(k === 'color' && [].concat(o.material).some(m => m.vertexColors))) g.deleteAttribute(k);
+      if (![].concat(o.material).some(m => m.map)) g.deleteAttribute('uv'); });
+    let tris = 0; root.traverse(o => { if (o.isMesh) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3; });
+    const glb = await new GLTFExporter().parseAsync(root, { binary: true, maxTextureSize: texMax });
+    const u8 = new Uint8Array(glb); let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+    out[job.name] = { b64: btoa(s), tris: Math.round(tris), bytes: u8.length };
+  }
+  return out;
+};
+window.ready = true;
+</script>

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Dead Tide</string>
+    <string name="title_activity_main">Dead Tide</string>
+    <string name="package_name">com.deadtide.game</string>
+    <string name="custom_url_scheme">com.deadtide.game</string>
+</resources>
