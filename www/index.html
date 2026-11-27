@@ -1743,7 +1743,7 @@ function sync(dt) {
   // zombies
   const frozen = G.pw.freeze > 0;
   for (const z of G.zombies) {
-    const sc = ZBASE * z.s, sink = z.dying ? Math.max(0, z.dying - 1.3) * 1.5 : 0;
+    const sc = ZBASE * z.s * ((z.model && z.model.scale) || 1), sink = z.dying ? Math.max(0, z.dying - 1.3) * 1.5 : 0;
     let clip, at;
     if (z.mask === 63) continue; // blown to pieces
     if (z.dying) { clip = 'death'; at = z.dying * 1.7; }
@@ -1944,6 +1944,7 @@ async function loadZombieModels() {
   await Promise.all(names.map(n => loadVAT(n, MAXZ, { gore: true }).then(R => { byName[n] = R; }).catch(e => console.warn('zombie model', n, e))));
   for (const t of ['walker', 'brute', 'boss']) ZMODELS[t] = (list[t] || []).map(n => byName[n]).filter(Boolean);
   ZALL = Object.values(byName);
+  for (const [n, R] of Object.entries(byName)) R.scale = (list.scale && list.scale[n]) || list.scale && list.scale.all || 1; // realistic proportions read smaller than the chunky soldiers
   if (!ZALL.length) return null;
   try { return await (await fetch(`models/${list.gibs || names[0]}-gibs.json`)).json(); } catch (e) { return null; }
 }
