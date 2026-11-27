@@ -903,7 +903,7 @@ function spawnGib(z, g, vx, vy, vz) {
   if (!z.shirt || !goreOn) return;
   const G0 = gibMeshes[g]; if (!G0) return;
   if (gibs.length >= GIB_MAX * 3) gibs.shift();
-  const sc = ZBASE * z.s, c = G0.center, cy = Math.cos(z.yaw), sy = Math.sin(z.yaw);
+  const sc = zScale(z), c = G0.center, cy = Math.cos(z.yaw), sy = Math.sin(z.yaw);
   gibs.push({ g, x: z.x + (c.x * cy + c.z * sy) * sc, y: c.y * sc + (z.lift || 0), z: z.z + (-c.x * sy + c.z * cy) * sc, vx, vy, vz,
     q: new THREE.Quaternion().setFromEuler(new THREE.Euler(0, z.yaw, 0)), w: new THREE.Vector3(rand(-1, 1), rand(-1, 1), rand(-1, 1)).normalize().multiplyScalar(rand(6, 14)),
     s: sc, tint: z.shirt, t: 0, life: rand(3.2, 4.2), bounced: 0, r: (g === 1 ? .2 : g === 0 ? .2 : .1) * sc, bleed: .7 });
@@ -1327,6 +1327,7 @@ function killSoldier(idx) {
 }
 
 /* ---------- zombies ---------- */
+const zScale = z => ZBASE * z.s * ((z.model && z.model.scale) || 1); // world size of a zombie, including its model's own scale
 function makeZombie(x, z, type) {
   const L = G ? G.L : 1;
   const T = type === 'boss' ? { hp: G.bossHp, s: 4.4 * (1 + Math.min(.6, (L - 1) * .06)), spd: 1.25 } /* tougher bosses on later levels are bigger too */ : type === 'brute' ? { hp: 14 + L * 5, s: 1.75, spd: rand(1.1, 1.5) } : { hp: 2 + L * .55, s: rand(.92, 1.08), spd: rand(1.3, 2.1) + L * .04 };
@@ -1355,7 +1356,7 @@ function hurtZombie(z, dmg, cause = 'bullet', fx = z.x, fz = z.z + 5, hitY = 0) 
 function killZombie(z, cause = 'bullet', fx = z.x, fz = z.z + 5, hitY = 0) {
   z.dying = .0001; G.kills++; sfx.splat(z.x); z.mask = 0; z.hitT = 0; z.flash = 0;
   G.coinsRun += (z.type === 'brute' ? 4 : z.type === 'boss' ? 0 : 1) * G.st.coin;
-  const sc = ZBASE * z.s, chest = .62 * sc;
+  const sc = zScale(z), chest = .62 * sc;
   if (cause === 'fire') { // burned to death: no gore, a charred body and a column of smoke
     z.char = 1; z.slide = .6; z.slideX = 0; z.slideZ = -1;
     for (let i = 0; i < 4; i++) smokeFx.add({ x: z.x, y: rand(.5, 1.2) * sc, z: z.z, vx: rand(-.3, .3), vy: rand(1, 2), vz: rand(-.3, .3), size: .5 * z.s, grow: 3, life: rand(1.2, 1.8), drag: 1, buoy: .6, r: .16, g: .15, b: .14, delay: i * .12 });
@@ -1625,7 +1626,7 @@ function update(dt) {
     z.flash = Math.max(0, z.flash - dt); z.flinch = (z.flinch || 0) - dt;
     if (z.burn > 0) { // on fire: burns, blackens and smokes
       z.burn -= dt; z.char = Math.min(.75, (z.char || 0) + dt * .45);
-      if (Math.random() < dt * (z.type === 'boss' ? 26 : 7)) flameFx.add({ x: z.x + rand(-.25, .25) * z.s, y: rand(.4, 1.1) * ZBASE * z.s, z: z.z + rand(-.2, .2), vx: rand(-.3, .3), vy: rand(.8, 1.8), size: rand(.2, .32) * Math.sqrt(z.s), grow: 3, stretch: .08, life: rand(.4, .6), drag: 1.4, buoy: 3, turb: .7, smoke: Math.random() < .3 ? 1 : 0 });
+      if (Math.random() < dt * (z.type === 'boss' ? 26 : 7)) flameFx.add({ x: z.x + rand(-.25, .25) * z.s, y: rand(.4, 1.1) * zScale(z), z: z.z + rand(-.2, .2), vx: rand(-.3, .3), vy: rand(.8, 1.8), size: rand(.2, .32) * Math.sqrt(z.s), grow: 3, stretch: .08, life: rand(.4, .6), drag: 1.4, buoy: 3, turb: .7, smoke: Math.random() < .3 ? 1 : 0 });
       hurtZombie(z, (.8 + G.L * .25) * dt, 'fire', z.x, z.z);
       if (z.dying) continue;
     }
@@ -1702,7 +1703,7 @@ function update(dt) {
   for (let i = drops.length - 1; i >= 0; i--) if (drops[i].dead) drops.splice(i, 1);
   // sprays from severed necks and shoulders, rising from the falling body
   for (const s2 of sprays) {
-    s2.t += dt; const z = s2.z, sc = ZBASE * z.s, fall = Math.min(1, s2.t / .6);
+    s2.t += dt; const z = s2.z, sc = zScale(z), fall = Math.min(1, s2.t / .6);
     const hy = (s2.g === 1 ? .82 : .62) * sc * (1 - fall * .75) + (z.lift || 0);
     if (Math.random() < dt * 60) bleed(z.x, hy, z.z, 1, (z.slideX || 0) * -.3, 1, (z.slideZ || 0) * -.3, .9, 3.6 * (1 - s2.t / s2.life), .9);
   }
@@ -1766,7 +1767,7 @@ function sync(dt) {
   // zombies
   const frozen = G.pw.freeze > 0;
   for (const z of G.zombies) {
-    const sc = ZBASE * z.s * ((z.model && z.model.scale) || 1), sink = z.dying ? Math.max(0, z.dying - 1.3) * 1.5 : 0;
+    const sc = zScale(z), sink = z.dying ? Math.max(0, z.dying - 1.3) * 1.5 : 0;
     let clip, at;
     if (z.mask === 63) continue; // blown to pieces
     if (z.dying) { clip = 'death'; at = z.dying * 1.7; }
