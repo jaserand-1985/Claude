@@ -90,7 +90,7 @@ async function bake(url, clipSpec, opts) {
   const h = box.max.y - box.min.y, cx = (box.min.x + box.max.x) / 2, cz = (box.min.z + box.max.z) / 2;
   // limbs (zombie): the source model's shins and forearms are bare bone sticks with a tiny foot block, which read as
   // pogo sticks from the game camera. Thicken the bone sticks into rotted flesh and add real feet with toes.
-  const thick = new Map(), feet = [];
+  const thick = new Map(), feet = [], hidden = new Map();
   if (opts.limbs) {
     const flesh = new THREE.Color(opts.limbs.flesh).convertLinearToSRGB();
     for (const m of meshes) {
@@ -103,7 +103,7 @@ async function bake(url, clipSpec, opts) {
       });
     }
     // a bare foot: tapered sole block plus five toes, built in bind pose around the foot bone and moved rigidly with it
-    const skin = new THREE.Color(opts.limbs.skin).convertLinearToSRGB(), nail = new THREE.Color(opts.limbs.nail).convertLinearToSRGB();
+    const skin = new THREE.Color(opts.limbs.skin).convertLinearToSRGB(), nail = new THREE.Color(opts.limbs.nail).convertLinearToSRGB(), nail8 = nail;
     for (const [bn, side] of [['FootL', 1], ['FootR', -1]]) {
       const bp = new THREE.Vector3(); bones[bn].getWorldPosition(bp);
       const parts = [], S = h * opts.limbs.footScale; // sizes below are fractions of the character's height
@@ -125,6 +125,43 @@ async function bake(url, clipSpec, opts) {
         for (let i = 0; i < pa.count; i++) { v.fromBufferAttribute(pa, i); geo.pos.push(v.x + bp.x, v.y + box.min.y, v.z + bp.z); col.push(p.c.r * 255 | 0, p.c.g * 255 | 0, p.c.b * 255 | 0); tint.push(0); part.push(0); group.push(side > 0 ? 4 : 5); idx.push(V++); } }
       feet.push(geo);
     }
+    // hands: the source fists are big mittens. Hide them and build an open, clawing hand with a palm, four two-joint
+    // fingers and a thumb, laid out along the forearm and moved rigidly with the fist bone.
+    for (const [bn, arm] of [['FistL', 'LowerArmL'], ['FistR', 'LowerArmR']]) {
+      for (const m of meshes) { const si = m.geometry.attributes.skinIndex, sw = m.geometry.attributes.skinWeight;
+        verts.forEach((e, vi) => { if (e.m !== m) return; let best = 0, bw = -1; for (let k = 0; k < 4; k++) { const w = sw.getComponent(e.i, k); if (w > bw) { bw = w; best = si.getComponent(e.i, k); } } if (m.skeleton.bones[best].name === bn) hidden.set(vi, bn); }); }
+      const fp = bones[bn].getWorldPosition(new THREE.Vector3()), ap = bones[arm].getWorldPosition(new THREE.Vector3());
+      const fwd = fp.clone().sub(ap).normalize(), side = new THREE.Vector3().crossVectors(fwd, V3(0, 1, 0)).normalize(), up = new THREE.Vector3().crossVectors(side, fwd).normalize();
+      const inward = Math.sign(-fp.x) || 1, sx = side.x >= 0 ? inward : -inward; // +x in hand space points toward the body (thumb side)
+      const basis = new THREE.Matrix4().makeBasis(side.clone().multiplyScalar(sx), up, fwd).setPosition(fp);
+      const S = h * opts.limbs.handScale, parts = [];
+      const seg = (len, r0, r1, m) => { const g = new THREE.CylinderGeometry(r1, r0, len, 6).translate(0, len / 2, 0).rotateX(Math.PI / 2).toNonIndexed(); g.applyMatrix4(m); return g; };
+      const flip = basis.determinant() < 0;
+      const put = (g, c) => { g.scale(S, S, S); g.applyMatrix4(basis); if (flip) { const pa = g.attributes.position; for (let i = 0; i < pa.count; i += 3) { const x = pa.getX(i + 1), y = pa.getY(i + 1), z = pa.getZ(i + 1); pa.setXYZ(i + 1, pa.getX(i + 2), pa.getY(i + 2), pa.getZ(i + 2)); pa.setXYZ(i + 2, x, y, z); } } parts.push({ g, c }); };
+      // palm: a flattened, slightly tapered block from the wrist forward
+      const palm = new THREE.BoxGeometry(.05, .02, .05).toNonIndexed(); const pp = palm.attributes.position;
+      for (let i = 0; i < pp.count; i++) { if (pp.getZ(i) > 0) pp.setX(i, pp.getX(i) * 1.12); }
+      palm.translate(0, 0, .02); put(palm, skin);
+      put(new THREE.CylinderGeometry(.016, .019, .03, 7).rotateX(Math.PI / 2).translate(0, 0, -.01).toNonIndexed(), skin); // wrist
+      const M = new THREE.Matrix4(), R = new THREE.Matrix4(), T = new THREE.Matrix4();
+      const finger = (x, len, r, splay, curl) => { // two segments: knuckle out, then a bent claw tip with a dark nail
+        const base = new THREE.Matrix4().makeTranslation(x, 0, .044).multiply(R.makeRotationY(splay)).multiply(T.makeRotationX(curl * .4));
+        put(seg(len * .55, r, r * .9, base), skin);
+        const tip = base.clone().multiply(M.makeTranslation(0, 0, len * .55)).multiply(R.makeRotationX(curl));
+        put(seg(len * .45, r * .9, r * .55, tip), skin);
+        const nail = new THREE.BoxGeometry(r * 1.3, r * .5, len * .22).translate(0, r * .55, len * .36).toNonIndexed(); nail.applyMatrix4(tip); put(nail, nail8);
+      };
+      finger(.017, .046, .0075, .10, .55); finger(.006, .052, .0078, .03, .5); finger(-.005, .05, .0075, -.04, .55); finger(-.016, .04, .0065, -.12, .65);
+      // thumb from the inner side of the palm, angled forward and down
+      const tb = new THREE.Matrix4().makeTranslation(.026, -.004, .012).multiply(R.makeRotationY(.75)).multiply(T.makeRotationX(.35));
+      put(seg(.026, .009, .008, tb), skin);
+      const tt = tb.clone().multiply(M.makeTranslation(0, 0, .026)).multiply(R.makeRotationY(-.4)).multiply(T.makeRotationX(.4));
+      put(seg(.022, .008, .005, tt), skin);
+      const inv = bones[bn].matrixWorld.clone().invert(), geo = { pos: [], base: V, bone: bn, inv };
+      for (const p of parts) { const pa = p.g.attributes.position;
+        for (let i = 0; i < pa.count; i++) { geo.pos.push(pa.getX(i), pa.getY(i), pa.getZ(i)); col.push(p.c.r * 255 | 0, p.c.g * 255 | 0, p.c.b * 255 | 0); tint.push(0); part.push(0); group.push(bn === 'FistL' ? 2 : 3); idx.push(V++); } }
+      feet.push(geo);
+    }
   }
   const norm = new THREE.Matrix4().makeRotationY(Math.PI).multiply(new THREE.Matrix4().makeScale(1 / h, 1 / h, 1 / h)).multiply(new THREE.Matrix4().makeTranslation(-cx, -box.min.y, -cz));
   // region recolour (e.g. one 'Skin' material that covers face, gloves and boots)
@@ -137,7 +174,7 @@ async function bake(url, clipSpec, opts) {
   const gibs = [];
   if (opts.gibs) for (let g = 0; g <= 5; g++) {
     const pos = [], c8 = [], t8 = [], ctr = new THREE.Vector3(); let n = 0;
-    for (const t of tris) if (t.grp === g) for (const vi of t.v) { const e = verts[vi]; e.m.getVertexPosition(e.i, v); v.applyMatrix4(e.m.matrixWorld).applyMatrix4(norm); pos.push(v.x, v.y, v.z); ctr.add(v); n++; c8.push(col[vi * 3], col[vi * 3 + 1], col[vi * 3 + 2]); t8.push(tint[vi]); }
+    for (const t of tris) if (t.grp === g && !t.v.some(vi => hidden.has(vi))) for (const vi of t.v) { const e = verts[vi]; e.m.getVertexPosition(e.i, v); v.applyMatrix4(e.m.matrixWorld).applyMatrix4(norm); pos.push(v.x, v.y, v.z); ctr.add(v); n++; c8.push(col[vi * 3], col[vi * 3 + 1], col[vi * 3 + 2]); t8.push(tint[vi]); }
     ctr.divideScalar(Math.max(1, n));
     for (let k = 0; k < pos.length; k += 3) { pos[k] -= ctr.x; pos[k + 1] -= ctr.y; pos[k + 2] -= ctr.z; }
     gibs.push({ g, center: [ctr.x, ctr.y, ctr.z].map(x => +x.toFixed(4)), pos: b64(new Uint8Array(new Float32Array(pos).buffer)), col: b64(new Uint8Array(c8)), tint: b64(new Uint8Array(t8)), count: n });
@@ -170,6 +207,7 @@ async function bake(url, clipSpec, opts) {
           const c = _c.copy(a).addScaledVector(ab, t), r = _r.subVectors(v, c), len = r.length();
           if (len > 1e-6) v.copy(c).addScaledVector(r, Math.min(len * ax[2], ax[3] * h) / len);
         }
+        const hb = hidden.get(vi); if (hb) bones[hb].getWorldPosition(v); // the old mitten collapses to a point inside the new hand
         v.applyMatrix4(norm); put(vi, v);
       });
       for (const ft of feet) { gm.multiplyMatrices(bones[ft.bone].matrixWorld, ft.inv); for (let i = 0; i < ft.pos.length / 3; i++) { v.fromArray(ft.pos, i * 3).applyMatrix4(gm).applyMatrix4(norm); put(ft.base + i, v); } }
@@ -191,7 +229,7 @@ function b64(u8) { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += 
 window.runBake = async () => {
   const out = {};
   const S = await bake('models/Soldier_Male.glb', [['Run_Carry', 'run', true], ['Walk_Carry', 'walk', true], ['Death', 'death', false], ['Victory', 'victory', true]], { tint: ['Main'], guns: true, gunScale: 1.0, colors: { Skin: '#d49a70', Black: '#2b2d30', DarkGreen: '#4d5a32', Helmet: '#56653a' }, region: { Skin: { below: .6, color: '#2f3134' } } });
-  const Z = await bake('models/Zombie_Male.glb', [['Walk_Carry', 'walk', true], ['Run_Carry', 'run', true], ['Punch', 'punch', true], ['Death', 'death', false], ['RecieveHit', 'hit', false]], { tint: ['Clothes'], guns: false, gibs: true, colors: { Skin: '#86a86a', Face: '#2a1414', DarkClothes: '#2f2a38' }, limbs: { flesh: '#6f8a58', skin: '#86a86a', nail: '#3a3020', footScale: 1.5 } });
+  const Z = await bake('models/Zombie_Male.glb', [['Walk_Carry', 'walk', true], ['Run_Carry', 'run', true], ['Punch', 'punch', true], ['Death', 'death', false], ['RecieveHit', 'hit', false]], { tint: ['Clothes'], guns: false, gibs: true, colors: { Skin: '#86a86a', Face: '#2a1414', DarkClothes: '#2f2a38' }, limbs: { flesh: '#6f8a58', skin: '#86a86a', nail: '#3a3020', footScale: 1.5, handScale: 1.5 } });
   for (const [k, r] of Object.entries({ soldier: S, zombie: Z })) {
     // pack: idx(u32) | col(u8*3) | tint(u8) | part(u8) | group(u8) | pad to 4 | vat(u16)
     const parts = [new Uint8Array(r.idx.buffer), r.col, r.tint, r.part, r.group];
