@@ -17,6 +17,8 @@ SRC, OUT, SPECS = argv[0], argv[1], argv[2:]
 FPS = 15
 MAX_TRIS = int(os.environ.get('MAX_TRIS', 6000))
 TEX = int(os.environ.get('TEX', 1024))
+GUNS = os.environ.get('GUNS')  # guns.json (tools/bake/guns.json): put the game's weapons in the character's hands
+GUN_SCALE = float(os.environ.get('GUN_SCALE', .75))
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 scn = bpy.context.scene
@@ -102,6 +104,7 @@ for m in mats:
     im = color_image(m)
     key = im.name if im else None
     if key not in tile_of: tile_of[key] = len(tiles); tiles.append(im)
+if GUNS: tiles.append('white')  # a plain white tile, so the guns' vertex colours show through the texture
 NT = len(tiles)
 
 topo = []  # per object: list of (vertex index, loop index)
@@ -129,9 +132,19 @@ for o in meshes:
             idx.append(key[k])
     topo.append(lst); e.to_mesh_clear()
 V = len(uvs)
+parts = [0] * V; cols = [(255, 255, 255)] * V
+guns = json.load(open(GUNS)) if GUNS else []
+gun_local, gun_nlocal = [], []
+for gp in guns:  # unindexed triangles, one game vertex each
+    n = len(gp['pos']) // 3
+    gun_local.append(np.array(gp['pos'], np.float32).reshape(-1, 3)); gun_nlocal.append(np.array(gp['nor'], np.float32).reshape(-1, 3))
+    for i in range(n):
+        idx.append(len(uvs)); uvs.append(((NT - 1 + .5) / NT, .5)); grp.append(0); parts.append(gp['part']); cols.append(tuple(gp['color']))
+VB = V; V = len(uvs)
+if guns: gun_local = np.concatenate(gun_local) * GUN_SCALE; gun_nlocal = np.concatenate(gun_nlocal)
 
 def frame_arrays():
-    P = np.zeros((V, 3), np.float32); N = np.zeros((V, 3), np.float32); k = 0
+    P = np.zeros((VB, 3), np.float32); N = np.zeros((VB, 3), np.float32); k = 0
     for o, lst in zip(meshes, topo):
         e = o.evaluated_get(dg); m = e.to_mesh(); M = np.array(e.matrix_world); R = np.linalg.inv(M[:3, :3]).T
         co = np.empty(len(m.vertices) * 3, np.float32); m.vertices.foreach_get('co', co); co = co.reshape(-1, 3)
@@ -153,6 +166,23 @@ def hips_xz():
 rest_hips = hips_xz()
 arm.data.pose_position = 'POSE'
 
+SW = np.array([[-1, 0, 0], [0, 0, 1], [0, 1, 0]], np.float32)  # Blender Z-up -> game Y-up
+def bone_frame(key, d):
+    """a bone's grip point and orientation in game space for the current frame (d = root motion removed)"""
+    pb = arm.pose.bones[by_key[key]]; M = np.array(arm.matrix_world @ pb.matrix, np.float32)
+    R = SW @ M[:3, :3]; R /= np.linalg.norm(R, axis=0, keepdims=True)
+    p = M[:3, 3].copy(); mid = key + 'Middle1'
+    if mid in by_key: p = (p + np.array(arm.matrix_world @ arm.pose.bones[by_key[mid]].head, np.float32)) / 2
+    p = SW @ p; p[0] -= d[0]; p[2] -= d[1]; p -= [cx, lo[1], cz]; p /= H
+    return p, R
+def gun_pose(d):
+    """grip in the right hand, barrel pointing at the left hand when it's holding the gun, else straight ahead"""
+    pr, _ = bone_frame('RightHand', d); pl, _ = bone_frame('LeftHand', d)
+    f = pl - pr; L = np.linalg.norm(f)
+    f = f / L if .08 < L < .5 else np.array([0, -.1, -1], np.float32) / np.linalg.norm([0, -.1, -1])
+    z = -f; x = np.cross([0, 1, 0], z); x /= np.linalg.norm(x) + 1e-9; y = np.cross(z, x)
+    return pr, np.stack([x, y, z], 1)
+
 # ---- bake every clip
 arm.animation_data_create()
 meta_clips, frames_P, frames_N, start = {}, [], [], 0
@@ -162,12 +192,19 @@ for c in clips:
     t0 = c['start'] if c['start'] is not None else 0; t1 = c['end'] if c['end'] is not None else c['dur']
     dur = (t1 - t0) / c['speed']; loop = not c['once']
     n = max(2, round(dur * FPS) + (0 if loop else 1))
+    gun_off = None
     for f in range(n):
         tt = t0 + (t1 - t0) * (f / n if loop else f / (n - 1))
         fr = c['f0'] + tt * c['fps']; scn.frame_set(int(fr), subframe=fr - int(fr)); dg.update()
         P, N = frame_arrays()
         d = hips_xz() - rest_hips; P[:, 0] -= d[0]; P[:, 2] -= d[1]  # in place
         P[:, 0] -= cx; P[:, 2] -= cz; P[:, 1] -= lo[1]; P /= H
+        if guns:  # the gun rides rigidly in the right hand, placed from the clip's first frame
+            hp, hr = bone_frame('RightHand', d)
+            if gun_off is None:
+                gp_, gr_ = gun_pose(d); gun_off = (hr.T @ gr_, hr.T @ (gp_ - hp))
+            gr = hr @ gun_off[0]; gpos = hp + hr @ gun_off[1]
+            P = np.concatenate([P, gun_local @ gr.T + gpos]); N = np.concatenate([N, gun_nlocal @ gr.T])
         frames_P.append(P); frames_N.append(N)
     meta_clips[c['name']] = {'start': start, 'frames': n, 'dur': dur, 'loop': loop}; start += n
 F = len(frames_P); rows = (V + 2047) // 2048; W = ((V + rows - 1) // rows + 63) // 64 * 64  # no texture wider than 2048, little padding
@@ -181,6 +218,7 @@ for i in range(F):
 import bpy_extras  # noqa: F401
 atlas = np.zeros((TEX, TEX * NT, 4), np.float32); atlas[..., 3] = 1
 for t, im in enumerate(tiles):
+    if isinstance(im, str): atlas[:, t * TEX:(t + 1) * TEX, :3] = 1; continue
     if im is None: atlas[:, t * TEX:(t + 1) * TEX, :3] = .5; continue
     im2 = im.copy(); im2.scale(TEX, TEX)
     px = np.array(im2.pixels[:], np.float32).reshape(TEX, TEX, 4)
@@ -198,22 +236,22 @@ def sample(uv):
 # ---- gibs: bind-pose chunks per body part, coloured from the texture
 UV = np.array(uvs, np.float32); IDX = np.array(idx, np.uint32); G = np.array(grp, np.uint8)
 rest_n = (rest_P - [cx, lo[1], cz]) / H
-vcol = sample(UV)
+vcol = sample(UV[:VB])
 gibs = []
 for g in range(6):
-    tri = IDX.reshape(-1, 3); sel = tri[(G[tri] == g).all(1)].ravel()
+    tri = IDX.reshape(-1, 3); tri = tri[(tri < VB).all(1)]; sel = tri[(G[tri] == g).all(1)].ravel()
     if not len(sel): gibs.append({'g': g, 'center': [0, 0, 0], 'pos': '', 'col': '', 'tint': '', 'count': 0}); continue
     p = rest_n[sel].astype(np.float32); ctr = p.mean(0); p -= ctr
     gibs.append({'g': g, 'center': [round(float(x), 4) for x in ctr], 'pos': base64.b64encode(p.tobytes()).decode(), 'col': base64.b64encode(vcol[sel].tobytes()).decode(), 'tint': base64.b64encode(np.zeros(len(sel), np.uint8).tobytes()).decode(), 'count': int(len(sel))})
 json.dump(gibs, open(OUT + '-gibs.json', 'w'))
 
 # ---- pack: idx(u32) | col(u8*3) | tint(u8) | part(u8) | group(u8) | uv(f32*2) | vat(f16*4) | nvat(u8*4)
-blobs = [('idx', IDX.tobytes()), ('col', np.full(V * 3, 255, np.uint8).tobytes()), ('tint', np.zeros(V, np.uint8).tobytes()),
-         ('part', np.zeros(V, np.uint8).tobytes()), ('group', G.tobytes()), ('uv', UV.tobytes()), ('vat', vat.tobytes()), ('nvat', nvat.tobytes())]
+blobs = [('idx', IDX.tobytes()), ('col', np.array(cols, np.uint8).ravel().tobytes()), ('tint', np.zeros(V, np.uint8).tobytes()),
+         ('part', np.array(parts, np.uint8).tobytes()), ('group', G.tobytes()), ('uv', UV.tobytes()), ('vat', vat.tobytes()), ('nvat', nvat.tobytes())]
 buf, offs = b'', {}
 for k, b in blobs:
     buf += b'\0' * (-len(buf) % 8); offs[k] = len(buf); buf += b
 open(OUT + '.bin', 'wb').write(buf)
-meta = {'V': V, 'W': W, 'rows': rows, 'fps': FPS, 'frames': F, 'indexCount': int(len(IDX)), 'clips': meta_clips, 'gunBase': V, 'offs': offs, 'tex': os.path.basename(OUT) + '.jpg', 'height': float(H)}
+meta = {'V': V, 'W': W, 'rows': rows, 'fps': FPS, 'frames': F, 'indexCount': int(len(IDX)), 'clips': meta_clips, 'gunBase': VB, 'offs': offs, 'tex': os.path.basename(OUT) + '.jpg', 'height': float(H)}
 json.dump(meta, open(OUT + '.json', 'w'))
 print('BAKED', os.path.basename(OUT), V, 'verts', len(IDX) // 3, 'tris', F, 'frames', round(len(buf) / 1e6, 2), 'MB', NT, 'texture tiles', list(meta_clips))
