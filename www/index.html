@@ -302,6 +302,7 @@ scene.fog = new THREE.Fog(new THREE.Color('#b9cde4'), 60, 240);
 const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 600);
 
 let composer = null, bloomPass = null;
+const GRADE = { tint: { value: new THREE.Color(1, 1, 1) }, sat: { value: 1.12 }, vig: { value: .55 }, flash: { value: 0 } }; // per-map mood, set by setTheme
 function buildComposer() { // HDR render -> bloom -> tone map -> grade/vignette
   const ext = renderer.extensions, hdr = ext.has('EXT_color_buffer_float') || ext.has('EXT_color_buffer_half_float');
   const rt = new THREE.WebGLRenderTarget(1, 1, { type: hdr ? THREE.HalfFloatType : THREE.UnsignedByteType, samples: 4 });
@@ -310,14 +311,15 @@ function buildComposer() { // HDR render -> bloom -> tone map -> grade/vignette
   bloomPass = new UnrealBloomPass(new THREE.Vector2(256, 256), .5, .55, hdr ? 1.05 : .82); composer.addPass(bloomPass);
   composer.addPass(new OutputPass());
   composer.addPass(new ShaderPass({
-    uniforms: { tDiffuse: { value: null } },
+    uniforms: { tDiffuse: { value: null }, tint: GRADE.tint, sat: GRADE.sat, vig: GRADE.vig, flash: GRADE.flash },
     vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }',
-    fragmentShader: `uniform sampler2D tDiffuse; varying vec2 vUv;
+    fragmentShader: `uniform sampler2D tDiffuse; uniform vec3 tint; uniform float sat, vig, flash; varying vec2 vUv;
       void main(){ vec3 c = texture2D(tDiffuse, vUv).rgb; float l = dot(c, vec3(.299,.587,.114));
-        c = mix(vec3(l), c, 1.12);                       // a touch more saturation
-        c = (c - .5) * 1.05 + .5;                         // and contrast
-        c *= vec3(1.02, 1., .97);                         // warm sunlight grade
-        vec2 d = vUv - .5; c *= 1. - dot(d, d) * .55;     // vignette
+        c = mix(vec3(l), c, sat);                         // per-map saturation (the gloomy maps are a little washed out)
+        c = (c - .5) * 1.06 + .5;                         // contrast
+        c *= mix(tint, vec3(1.), smoothstep(.35, .9, l)); // tint shadows and mids, keep highlights (gates, muzzle flashes) clean
+        c += vec3(.5, .56, .72) * flash;                  // lightning
+        vec2 d = vUv - .5; c *= 1. - dot(d, d) * vig;     // vignette
         gl_FragColor = vec4(clamp(c, 0., 1.), 1.); }`
   }));
 }
@@ -1106,11 +1108,12 @@ async function buildDeadWoods(grp) {
 }
 
 const THEMES = {
-  bridge:    { name: 'HIGHWAY BRIDGE', sky: ['#2f6fd0', '#7fb2ea', '#dbe7f2'], sunDir: [.45, .35, -1], fog: ['#b9cde4', 60, 240], hemi: ['#dfeeff', '#5f5a58', .7], sun: ['#fff0d8', 3.4], env: .75, road: 'asphalt', ground: '#5d6066', build: buildBridge },
-  downtown:  { name: 'DOWNTOWN', sky: ['#3d72b8', '#93bce2', '#e9e4dc'], sunDir: [-.6, .5, -1], fog: ['#c9ced6', 40, 155], hemi: ['#e8eef8', '#6a645e', .8], sun: ['#fff2dc', 3.2], env: .7, road: 'asphalt', ground: '#6b6a68', build: buildDowntown },
-  forest:    { name: 'PINE FOREST', sky: ['#3f78c0', '#98c2e2', '#d8e6d6'], sunDir: [.6, .55, -1], fog: ['#b4cbbc', 30, 135], hemi: ['#e6f2e0', '#4b5a35', .85], sun: ['#fff4d6', 3.1], env: .65, road: 'dirt', ground: '#4d6232', build: buildForest },
-  desert:    { name: 'DESERT HIGHWAY', sky: ['#3f80c8', '#a6c9e2', '#f2dcb4'], sunDir: [.35, .6, -1], fog: ['#ead6b2', 70, 260], hemi: ['#fff1dc', '#a07a50', .95], sun: ['#fff0d0', 3.9], env: .7, road: 'desert', ground: '#c9a46c', build: buildDesert },
-  deadwoods: { name: 'DEAD WOODS', sky: ['#1c1a2c', '#5b3e57', '#d6735a'], sunDir: [.15, .1, -1], fog: ['#6e5b67', 22, 120], hemi: ['#b9a6c8', '#2d2420', .6], sun: ['#ffb38a', 2.3], env: .5, road: 'dirt', ground: '#3a3228', build: buildDeadWoods }
+  // exposure darkens the whole frame on LOW graphics too; grade: [shadow tint, saturation, vignette] (HIGH graphics only); storm: lightning flashes per second (0 = none)
+  bridge:    { name: 'HIGHWAY BRIDGE', sky: ['#121926', '#2b3546', '#5b5e66'], sunDir: [.45, .22, -1], fog: ['#3a4250', 32, 165], hemi: ['#93a3bf', '#2a2826', .62], sun: ['#ffc9a0', 2.1], env: .42, exposure: 0.8, road: 'asphalt', ground: '#3a3c40', grade: ['#c6d0e8', .84, .85], storm: .07, build: buildBridge },
+  downtown:  { name: 'DOWNTOWN', sky: ['#14181a', '#343a36', '#646656'], sunDir: [-.6, .3, -1], fog: ['#454a45', 22, 118], hemi: ['#a8b2a0', '#2c2a26', .62], sun: ['#ffd8a0', 1.9], env: .4, exposure: 0.88, road: 'asphalt', ground: '#3e3d3b', grade: ['#c8d6c2', .8, .88], storm: .05, build: buildDowntown },
+  forest:    { name: 'PINE FOREST', sky: ['#151d1a', '#36443e', '#6c7a72'], sunDir: [.6, .3, -1], fog: ['#4f5c55', 16, 100], hemi: ['#acbcaa', '#262c1e', .66], sun: ['#e6e2c8', 1.8], env: .4, exposure: 0.8, road: 'dirt', ground: '#2e3a22', grade: ['#c2d2c6', .8, .88], storm: 0, build: buildForest },
+  desert:    { name: 'DESERT HIGHWAY', sky: ['#1c1624', '#55363a', '#b06a48'], sunDir: [.35, .16, -1], fog: ['#6e5040', 36, 180], hemi: ['#dcbca4', '#4a3424', .64], sun: ['#ff9c62', 2.5], env: .45, exposure: 0.72, road: 'desert', ground: '#7a5c40', grade: ['#e0c6ba', .88, .82], storm: 0, build: buildDesert },
+  deadwoods: { name: 'DEAD WOODS', sky: ['#0d0c17', '#33223a', '#8e3e36'], sunDir: [.15, .1, -1], fog: ['#382c3a', 16, 100], hemi: ['#a08ab4', '#1e1816', .56], sun: ['#ff9868', 2.0], env: .38, exposure: 0.92, road: 'dirt', ground: '#2a241e', grade: ['#d0c2dc', .88, .9], storm: .04, build: buildDeadWoods }
 };
 const THEME_ORDER = ['bridge', 'downtown', 'forest', 'desert', 'deadwoods'];
 let themeId = null;
@@ -1133,7 +1136,23 @@ async function setTheme(id) {
   hemi.color.set(T.hemi[0]); hemi.groundColor.set(T.hemi[1]); hemi.intensity = T.hemi[2];
   sun.color.set(T.sun[0]); sun.intensity = T.sun[1]; G && (G.sunDir = T.sunDir);
   roadMesh.material.map = ROADS[T.road]; ROADS[T.road].repeat.set(1, ROAD_LEN / 12); roadMesh.material.needsUpdate = true;
-  envGround.color.set(T.ground); rebuildEnv(T.env);
+  envGround.color.set(T.ground); rebuildEnv(T.env); renderer.toneMappingExposure = T.exposure;
+  GRADE.tint.value.set(T.grade[0]); GRADE.sat.value = T.grade[1]; GRADE.vig.value = T.grade[2]; storm.t = 0; storm.wait = rand(4, 9);
+}
+
+/* ================= lightning: rare soft flashes on stormy maps, with distant thunder ================= */
+const storm = { t: 0, wait: 6, peak: 0 };
+function updateStorm(dt) {
+  const T = THEMES[themeId], base = T ? T.hemi[2] : hemi.intensity;
+  if (!T || !T.storm || reduceMotion) { GRADE.flash.value = 0; hemi.intensity = base; return; }
+  storm.wait -= dt;
+  if (storm.wait <= 0) { // a flicker of two or three pulses, then thunder a moment later
+    storm.wait = rand(.6, 1.4) / T.storm; storm.t = 0; storm.peak = rand(.7, 1);
+    if (AC && soundOn) { const d = rand(.5, 1.6); play('boom', { vol: .14 * storm.peak, rate: rand(.38, .5), rev: .7, lp: 900, delay: d, pan: rand(-.6, .6) }); thump(34, 1.8, .22 * storm.peak, d); }
+  }
+  storm.t += dt; const k = storm.t;
+  const f = k > .9 ? 0 : storm.peak * Math.max(0, Math.exp(-k * 9) + .7 * Math.exp(-Math.max(0, k - .16) * 12) * (k > .16 ? 1 : 0) + .4 * Math.exp(-Math.max(0, k - .38) * 10) * (k > .38 ? 1 : 0));
+  GRADE.flash.value = Math.min(.16, f * .14); hemi.intensity = base + f * 1.6;
 }
 
 /* ================= labels (DOM) ================= */
@@ -1802,6 +1821,7 @@ function sync(dt) {
   sparks.update(dt); flashes.update(dt); muzzle.update(dt); fireFx.update(dt); smokeFx.update(dt); updateGroundFires(dt); flameFx.update(dt);
   flameGlow += ((G.flaming ? 1 : 0) - flameGlow) * Math.min(1, dt * 10);
   if (flameGlow > .01) { flameLight.position.set(G.sx + Math.sin(t * 23) * .3, 1.4, G.sz - 5.5 + Math.sin(t * 17) * .4); flameLight.intensity = 45 * flameGlow * (.8 + Math.random() * .35); } else flameLight.intensity = 0;
+  updateStorm(dt);
   boomLightT = Math.max(0, boomLightT - dt * 3.2); boomLight.intensity = boomLightPeak * boomLightT * boomLightT * (.85 + Math.random() * .3);
   for (const r of rings) { if (!r.m.visible) continue; r.t += dt; const f = r.t / r.life; if (f >= 1) { r.m.visible = false; continue; } const s = r.max * (.2 + .8 * (1 - (1 - f) ** 3)); r.m.scale.set(s, 1, s); r.m.material.opacity = (1 - f) * .9; }
 }

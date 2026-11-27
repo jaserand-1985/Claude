@@ -15,11 +15,11 @@ A 3D zombie lane shooter for Android phones. Your squad charges down a road thro
 
 | Map | Ground and scenery |
 | --- | --- |
-| Highway Bridge | Elevated highway over water, glass towers |
-| Downtown | Paved sidewalks and curbs, brick buildings, streetlights, traffic lights, bollards, crosswalks, wrecked cars |
-| Pine Forest | Dirt road, grass, pines and autumn trees, ferns, bushes, rocks |
-| Desert Highway | Sand and dunes, sandstone rocks and mesas, guard rails, telephone poles with wires |
-| Dead Woods | Dead and twisted trees, a roadside graveyard, iron fence, red dusk |
+| Highway Bridge | Elevated highway over water, dark towers, storm clouds and lightning |
+| Downtown | Smoggy dusk with thick fog and lightning; paved sidewalks and curbs, brick buildings, streetlights, traffic lights, bollards, crosswalks, wrecked cars |
+| Pine Forest | Heavy mist; dirt road, grass, pines and autumn trees, ferns, bushes, rocks |
+| Desert Highway | Blood-red dusk and dust haze; sand and dunes, sandstone rocks and mesas, guard rails, telephone poles with wires |
+| Dead Woods | Dead and twisted trees, a roadside graveyard, iron fence, red dusk, thick fog, lightning |
 
 The **MAP** button in the Armory picks a map, or AUTO to change map every level.
 
