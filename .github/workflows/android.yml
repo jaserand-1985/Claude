@@ -25,6 +25,9 @@ jobs:
           java-version: 21
 
       - uses: android-actions/setup-android@v3
+        with:
+          # the default list includes the retired 'tools' package, which makes sdkmanager fail
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
 
       - name: Install Capacitor and copy the game into the Android project
         run: |
