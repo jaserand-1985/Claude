@@ -1775,6 +1775,8 @@ function update(dt) {
   const crateT = G.phase === 'run' ? G.crates.find(c => !c.dead && G.sz - c.z > 1 && G.sz - c.z < RANGE) : null; // nearest crate ahead
   const bigT = G.phase === 'run' ? bigThreat(RANGE * .85) : null; // brutes draw the fire: the hero and most of the squad aim at them
   let fired = 0, heroFired = false;
+  // aim assist: soldiers spread their fire over the closest walkers ahead, so a mob off to one side still gets shot
+  const near = G.phase === 'run' ? G.zombies.filter(z => !z.dying && z.type !== 'boss' && G.sz - z.z > 1 && G.sz - z.z < RANGE).sort((a, b) => b.z - a.z).slice(0, 24) : [];
   for (const s of G.soldiers) {
     s.ox += (s.tx - s.ox) * Math.min(1, dt * 6); s.oz += (s.tz - s.oz) * Math.min(1, dt * 6);
     s.pop = Math.min(1, s.pop + dt * 3);
@@ -1783,7 +1785,7 @@ function update(dt) {
     if (s.cd <= 0) {
       s.cd += 1 / st.rate * rand(.85, 1.15);
       if (target && (s.hero || Math.random() < p)) {
-        const [x, z] = soldierWorld(s), sc = s.hero ? 1.45 : 1, aim = G.boss && !G.boss.dying && G.phase === 'boss' ? G.boss : bigT && (s.hero || s.ab < .65) ? bigT : crateT && Math.abs(crateT.x - x) < 2.6 ? crateT : null; // soldiers near a crate's lane aim at it
+        const [x, z] = soldierWorld(s), sc = s.hero ? 1.45 : 1, aim = G.boss && !G.boss.dying && G.phase === 'boss' ? G.boss : bigT && (s.hero || s.ab < .65) ? bigT : crateT && Math.abs(crateT.x - x) < 2.6 ? crateT : near.length ? near[Math.floor(s.ab * near.length)] : null; // soldiers near a crate's lane aim at it
         if (s.hero || wk === 'rifle') fire(x + .05 * sc, z - .7 * sc, s.hero ? st.dmg * 1.5 : st.dmg / p, s.hero, aim);
         else if (wk === 'shotgun') { for (let k = 0; k < 5; k++) addBullet(x + .05, z - .7, rand(-.2, .2) + (aim ? clamp(Math.atan2(aim.x - x, Math.max(2, z - aim.z)), -.45, .45) : 0), st.dmg * .95 / p, false, false, 'pellet', 21); }
         else if (wk === 'rocket') addRocket(x + .05, z - .8, target, st.dmg * 2.2 / p);
