@@ -356,11 +356,11 @@ addEventListener('resize', resize);
 
 const sky = new THREE.Mesh(new THREE.SphereGeometry(500, 32, 16), new THREE.ShaderMaterial({
   side: THREE.BackSide, depthWrite: false, fog: false,
-  uniforms: { top: { value: new THREE.Color('#2f6fd0') }, mid: { value: new THREE.Color('#7fb2ea') }, hor: { value: new THREE.Color('#dbe7f2') }, sun: { value: new THREE.Vector3(.45, .35, -1).normalize() } },
+  uniforms: { top: { value: new THREE.Color('#2f6fd0') }, mid: { value: new THREE.Color('#7fb2ea') }, hor: { value: new THREE.Color('#dbe7f2') }, sun: { value: new THREE.Vector3(.45, .35, -1).normalize() }, glow: { value: 1 } },
   vertexShader: `varying vec3 vP; void main(){ vP = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }`,
-  fragmentShader: `uniform vec3 top, mid, hor, sun; varying vec3 vP;
+  fragmentShader: `uniform vec3 top, mid, hor, sun; uniform float glow; varying vec3 vP;
     void main(){ float h = vP.y; vec3 c = mix(hor, mid, smoothstep(-.02,.2,h)); c = mix(c, top, smoothstep(.2,.75,h));
-      float s = max(dot(normalize(vP), sun), 0.); c += vec3(1.,.9,.75) * (pow(s, 60.) * 1.2 + pow(s, 8.) * .18);
+      float s = max(dot(normalize(vP), sun), 0.); c += vec3(1.,.9,.75) * (pow(s, 60.) * 1.2 + pow(s, 8.) * .18) * glow;
       gl_FragColor = vec4(c,1.);
       #include <tonemapping_fragment>
       #include <colorspace_fragment>
@@ -1155,27 +1155,75 @@ async function ensureTheme(id) {
   if (!themeGroups[id]) { const grp = new THREE.Group(); grp.visible = false; scene.add(grp); themeGroups[id] = (async () => { await THEMES[id].build(grp); return grp; })(); }
   return themeGroups[id];
 }
-async function setTheme(id) {
+async function setTheme(id, L = 1) {
   const grp = await ensureTheme(id);
-  if (themeId === id) return;
-  themeId = id; const T = THEMES[id];
+  if (themeId !== id) { themeId = id; applyTheme(grp); }
+  applyMood(THEMES[id], moodFor(L));
+}
+function applyTheme(grp) {
+  const T = THEMES[themeId];
   for (const [k, g] of Object.entries(themeGroups)) g.then(gr => { gr.visible = k === themeId; });
   grp.visible = true;
-  const u = sky.material.uniforms; u.top.value.set(T.sky[0]); u.mid.value.set(T.sky[1]); u.hor.value.set(T.sky[2]); u.sun.value.set(...T.sunDir).normalize();
-  scene.fog.color.set(T.fog[0]); scene.fog.near = T.fog[1]; scene.fog.far = T.fog[2];
-  for (const P of [fireFx, smokeFx, flameFx]) { P.mesh.material.uniforms.fogNear.value = T.fog[1]; P.mesh.material.uniforms.fogFar.value = T.fog[2]; }
-  camera.far = T.fog[2] + 8; camera.updateProjectionMatrix(); sky.scale.setScalar(camera.far * .9 / 500);
-  hemi.color.set(T.hemi[0]); hemi.groundColor.set(T.hemi[1]); hemi.intensity = T.hemi[2];
-  sun.color.set(T.sun[0]); sun.intensity = T.sun[1]; G && (G.sunDir = T.sunDir);
+  hemi.color.set(T.hemi[0]); hemi.groundColor.set(T.hemi[1]);
+  sun.color.set(T.sun[0]); G && (G.sunDir = T.sunDir); sky.material.uniforms.sun.value.set(...T.sunDir).normalize();
   roadMesh.material.map = ROADS[T.road]; ROADS[T.road].repeat.set(1, ROAD_LEN / 12); roadMesh.material.needsUpdate = true;
-  envGround.color.set(T.ground); rebuildEnv(T.env); renderer.toneMappingExposure = T.exposure;
-  GRADE.tint.value.set(T.grade[0]); GRADE.sat.value = T.grade[1]; GRADE.vig.value = T.grade[2]; storm.t = 0; storm.wait = rand(4, 9);
+  envGround.color.set(T.ground);
+  GRADE.tint.value.set(T.grade[0]); GRADE.sat.value = T.grade[1]; storm.t = 0; storm.wait = rand(4, 9);
+}
+
+/* ================= per-level mood: darkness and fog change from level to level, on top of each map's look ================= */
+// dark 0..1 dims the sky, sun, sky light and exposure and turns on the squad's flashlights; fog 0..1 pulls the fog in and thickens the ground mist
+const MOODS = [
+  { name: 'DUSK', dark: 0, fog: .15 },
+  { name: 'THICK FOG', dark: .25, fog: .85 },
+  { name: 'NIGHTFALL', dark: .65, fog: .3 },
+  { name: 'MIST', dark: .35, fog: .55 },
+  { name: 'DEAD OF NIGHT', dark: .9, fog: .6 },
+  { name: 'FOG BANK', dark: .5, fog: 1 }
+];
+function moodFor(L) { // six moods against five maps, so each map comes round in a different mood; later levels creep darker
+  const m = MOODS[(L - 1) % MOODS.length], ramp = L > 1 ? clamp(.1 + (L - 2) * .02, 0, .3) : 0;
+  return { name: m.name, dark: clamp(m.dark + ramp, 0, .95), fog: clamp(m.fog + ramp * .5, 0, 1) };
+}
+const mood = { dark: 0, fog: 0, hemi: 1, name: '' }, _black = new THREE.Color(0, 0, 0);
+function applyMood(T, M) {
+  const d = M.dark, f = M.fog; Object.assign(mood, M);
+  const u = sky.material.uniforms; u.top.value.set(T.sky[0]).lerp(_black, .7 * d); u.mid.value.set(T.sky[1]).lerp(_black, .66 * d); u.hor.value.set(T.sky[2]).lerp(_black, .6 * d); u.glow.value = 1 - .85 * d;
+  scene.fog.color.set(T.fog[0]).lerp(_black, .62 * d);
+  const near = T.fog[1] * (1 - .8 * f), far = Math.max(48, T.fog[2] * (1 - .62 * f));
+  scene.fog.near = near; scene.fog.far = far;
+  for (const P of [fireFx, smokeFx, flameFx]) { P.mesh.material.uniforms.fogNear.value = near; P.mesh.material.uniforms.fogFar.value = far; }
+  camera.far = far + 8; camera.updateProjectionMatrix(); sky.scale.setScalar(camera.far * .9 / 500);
+  mood.hemi = T.hemi[2] * (1 - .5 * d); hemi.intensity = mood.hemi;
+  sun.intensity = T.sun[1] * (1 - .78 * d);
+  envGround.color.set(T.ground).lerp(_black, .5 * d); rebuildEnv(T.env * (1 - .6 * d));
+  renderer.toneMappingExposure = T.exposure * (1 - .22 * d);
+  GRADE.vig.value = T.grade[2] + .4 * d;
+  torch.intensity = 150 * clamp((d - .2) / .7, 0, 1); squadFill.intensity = 14 * clamp(d / .6, 0, 1);
+  mist.material.color.copy(scene.fog.color).multiplyScalar(1.6); mist.material.opacity = .1 + .38 * f; mist.visible = f > .05;
+}
+// squad flashlights: one wide beam ahead of the squad, so the road and the oncoming horde stay readable at night
+const torch = new THREE.SpotLight('#dfe8ff', 0, 40, .5, .7, 1.1); torch.position.set(0, -50, 0); scene.add(torch, torch.target);
+const squadFill = new THREE.PointLight('#cdd8f0', 0, 9, 1.3); scene.add(squadFill); // soft fill so the squad itself never goes to silhouette
+// low drifting ground mist: a scrolling cloud texture on a big sheet at knee height that follows the camera
+const mistTex = canvasTex(256, 256, (g, w, h) => {
+  g.clearRect(0, 0, w, h);
+  for (let i = 0; i < 90; i++) { const x = Math.random() * w, y = Math.random() * h, r = rand(18, 60);
+    for (const ox of [-w, 0, w]) for (const oy of [-h, 0, h]) { const gr = g.createRadialGradient(x + ox, y + oy, 0, x + ox, y + oy, r); gr.addColorStop(0, `rgba(255,255,255,${rand(.12, .3)})`); gr.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = gr; g.fillRect(x + ox - r, y + oy - r, r * 2, r * 2); } }
+});
+mistTex.wrapS = mistTex.wrapT = THREE.RepeatWrapping; mistTex.repeat.set(3, 4);
+const mist = new THREE.Mesh(new THREE.PlaneGeometry(70, 90).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: mistTex, transparent: true, depthWrite: false, opacity: .2 }));
+mist.renderOrder = 2; scene.add(mist);
+function updateAtmos(dt, t) {
+  if (!G) return;
+  mist.position.set(0, .55, G.sz - 30); mistTex.offset.set(t * .006, -G.sz / 90 * 4 + t * .01);
+  torch.position.set(G.sx, 3.2, G.sz - 1.5); squadFill.position.set(G.sx, 3.4, G.sz + 2.2); torch.target.position.set(G.sx * .6, 0, G.sz - 20);
 }
 
 /* ================= lightning: rare soft flashes on stormy maps, with distant thunder ================= */
 const storm = { t: 0, wait: 6, peak: 0 };
 function updateStorm(dt) {
-  const T = THEMES[themeId], base = T ? T.hemi[2] : hemi.intensity;
+  const T = THEMES[themeId], base = mood.hemi;
   if (!T || !T.storm || reduceMotion) { GRADE.flash.value = 0; hemi.intensity = base; return; }
   storm.wait -= dt;
   if (storm.wait <= 0) { // a flicker of two or three pulses, then thunder a moment later
@@ -1233,26 +1281,26 @@ const weaponUnlocked = w => save.level >= WEAPONS[w].unlock;
 const gateGood = s => s.kind === 'mul' || (s.kind === 'add' && s.v > 0);
 const gateText = s => s.kind === 'add' ? (s.v > 0 ? '+' : s.v < 0 ? '−' : '') + Math.abs(s.v) : s.kind === 'mul' ? '×' + s.v : '÷' + s.v;
 function drawPanel(p) {
-  const g = p.ctx, w = 256, h = 160, good = gateGood(p.spec);
+  const g = p.ctx, w = 384, h = 128, good = gateGood(p.spec); // a slim see-through banner so the horde behind stays visible
   g.clearRect(0, 0, w, h);
   const gr = g.createLinearGradient(0, 0, 0, h);
-  if (good) { gr.addColorStop(0, 'rgba(90,170,255,.85)'); gr.addColorStop(1, 'rgba(20,90,220,.55)'); } else { gr.addColorStop(0, 'rgba(255,110,95,.85)'); gr.addColorStop(1, 'rgba(200,25,20,.55)'); }
+  if (good) { gr.addColorStop(0, 'rgba(90,170,255,.5)'); gr.addColorStop(1, 'rgba(20,90,220,.28)'); } else { gr.addColorStop(0, 'rgba(255,110,95,.5)'); gr.addColorStop(1, 'rgba(200,25,20,.28)'); }
   g.fillStyle = gr; g.fillRect(0, 0, w, h);
-  g.strokeStyle = p.boost && good ? '#ffc531' : good ? '#cfe6ff' : '#ffd6cf'; g.lineWidth = p.boost && good ? 14 : 8; g.strokeRect(p.boost && good ? 7 : 4, p.boost && good ? 7 : 4, w - (p.boost && good ? 14 : 8), h - (p.boost && good ? 14 : 8));
-  g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.font = '84px Bungee, Impact, sans-serif';
-  g.shadowColor = 'rgba(0,0,0,.45)'; g.shadowOffsetY = 5; g.fillText(gateText(p.spec), w / 2, h / 2 + 4); g.shadowColor = 'transparent';
-  if (p.spec.kind === 'add') { g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(24, h - 22, w - 48, 8); g.fillStyle = '#fff'; g.fillRect(24, h - 22, (w - 48) * p.prog, 8); }
+  g.strokeStyle = p.boost && good ? '#ffc531' : good ? '#cfe6ff' : '#ffd6cf'; g.lineWidth = p.boost && good ? 12 : 6; g.strokeRect(p.boost && good ? 6 : 3, p.boost && good ? 6 : 3, w - (p.boost && good ? 12 : 6), h - (p.boost && good ? 12 : 6));
+  g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.font = '80px Bungee, Impact, sans-serif';
+  g.shadowColor = 'rgba(0,0,0,.7)'; g.shadowBlur = 6; g.shadowOffsetY = 4; g.fillText(gateText(p.spec), w / 2, h / 2 + 2); g.shadowBlur = 0; g.shadowColor = 'transparent';
+  if (p.spec.kind === 'add') { g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(24, h - 14, w - 48, 7); g.fillStyle = '#fff'; g.fillRect(24, h - 14, (w - 48) * p.prog, 7); }
   p.tex.needsUpdate = true;
 }
 function makeGate(z, L, R, hitsPer) {
   const grp = new THREE.Group(); grp.position.z = z; scene.add(grp);
   const postMat = flat('#2b3245', { metalness: .4, roughness: .5 });
-  for (const x of [-HALF + .1, 0, HALF - .1]) { const p = new THREE.Mesh(box(.24, 3.4, .24, 0, 1.7, 0), postMat); p.position.x = x; p.castShadow = true; grp.add(p); }
-  grp.add(new THREE.Mesh(box(ROAD_W, .26, .3, 0, 3.4, 0), postMat));
+  for (const x of [-HALF + .1, 0, HALF - .1]) { const p = new THREE.Mesh(box(.14, 3.4, .14, 0, 1.7, 0), postMat); p.position.x = x; p.castShadow = true; grp.add(p); }
+  grp.add(new THREE.Mesh(box(ROAD_W, .16, .2, 0, 3.45, 0), postMat));
   const panels = [L, R].map((spec, i) => {
-    const c = document.createElement('canvas'); c.width = 256; c.height = 160; const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(HALF - .3, 2.75), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }));
-    mesh.position.set((i ? 1 : -1) * HALF / 2, 1.8, 0); grp.add(mesh);
+    const c = document.createElement('canvas'); c.width = 384; c.height = 128; const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(HALF - .5, 1.3), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }));
+    mesh.position.set((i ? 1 : -1) * HALF / 2, 2.72, 0); grp.add(mesh); // hung high under the crossbar, the zombies show below it
     const p = { spec, ctx: c.getContext('2d'), tex, mesh, hits: 0, prog: 0, dirty: 0 }; drawPanel(p); return p;
   });
   return { z, grp, panels, hitsPer, passed: false, fade: 0 };
@@ -1331,7 +1379,7 @@ const stats = () => ({ dmg: Math.pow(1.2, save.up.dmg), rate: 3.4 * Math.pow(1.1
 
 function newGame(L, preview = false) {
   if (G) teardown();
-  setTheme(themeFor(L));
+  setTheme(themeFor(L), L);
   const st = stats();
   G = { L, preview, st, t: 0, sx: 0, tx: 0, sz: 0, speed: 5.4, vel: 5.4, halt: false, phase: 'run', len: Math.min(560, 230 + L * 26), R: 1,
     soldiers: [], fallen: [], zombies: [], bullets: [], gates: [], crates: [], tokens: [], hordes: [], boss: null, bossSpawned: false, bossHp: 300,
@@ -1921,7 +1969,7 @@ function sync(dt) {
   if (G.shake > 0 && !reduceMotion) camera.position.add(_v.set(rand(-1, 1), rand(-1, 1), 0).multiplyScalar(G.shake * .35));
   camera.lookAt(camLook);
   sky.position.copy(camera.position); updateLod();
-  sun.position.set(G.sx + 9, 24, G.sz - 16); sun.target.position.set(G.sx, 0, G.sz - 5);
+  sun.position.set(G.sx + 9, 24, G.sz - 16); sun.target.position.set(G.sx, 0, G.sz - 5); updateAtmos(dt, t);
 
   // soldiers (+ fallen soldiers playing their death animation)
   blobN = 0;
@@ -2086,11 +2134,11 @@ function goMenu() {
 }
 async function startLevel() {
   ensureAudio();
-  if (themeId !== themeFor(save.level)) { const b = $('playBtn'), t = b.textContent; b.textContent = 'LOADING MAP…'; b.disabled = true; try { await setTheme(themeFor(save.level)); } finally { b.textContent = t; b.disabled = false; } } ['menu', 'pause', 'win', 'lose'].forEach(i => show(i, false)); show('hud', true); show('hint', true); $('hint').style.opacity = 1;
+  if (themeId !== themeFor(save.level)) { const b = $('playBtn'), t = b.textContent; b.textContent = 'LOADING MAP…'; b.disabled = true; try { await setTheme(themeFor(save.level), save.level); } finally { b.textContent = t; b.disabled = false; } } ['menu', 'pause', 'win', 'lose'].forEach(i => show(i, false)); show('hud', true); show('hint', true); $('hint').style.opacity = 1;
   $('bossbar').hidden = true; for (const k in chipEls) chipEls[k].hidden = true;
   newGame(save.level); $('hudLv').textContent = 'LEVEL ' + save.level; lastCoins = -1; updateWeaponChip();
   state = 'play'; drag.on = false;
-  banner('LEVEL ' + save.level, THEMES[themeFor(save.level)].name, 1600);
+  banner('LEVEL ' + save.level, THEMES[themeFor(save.level)].name + ' · ' + moodFor(save.level).name, 1600);
   requestWake();
 }
 function togglePause() {

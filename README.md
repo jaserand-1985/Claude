@@ -21,6 +21,8 @@ A 3D zombie lane shooter for Android phones. Your squad charges down a road thro
 | Desert Highway | Blood-red dusk and dust haze; sand and dunes, sandstone rocks and mesas, guard rails, telephone poles with wires |
 | Dead Woods | Dead and twisted trees, a roadside graveyard, iron fence, red dusk, thick fog, lightning |
 
+Each level also has its own mood on top of the map: Dusk, Thick Fog, Nightfall, Mist, Dead of Night or Fog Bank, and later levels creep darker. On the dark levels the squad's flashlights light the road ahead, and low mist drifts across the road on the foggy ones.
+
 The **MAP** button in the Armory picks a map, or AUTO to change map every level.
 
 ### Weapons
