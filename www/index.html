@@ -109,6 +109,7 @@ h2{font-family:var(--display);font-size:clamp(30px,9vw,40px);margin:0;color:var(
       <div class="ups" id="ups"></div>
       <div class="row2"><button class="btn ghost" id="wpnBtn">WEAPON: RIFLE</button><button class="btn ghost" id="mapBtn">MAP: AUTO</button></div>
       <div class="row2"><button class="btn ghost" id="soundBtn">SOUND: ON</button><button class="btn ghost" id="gfxBtn">GRAPHICS: HIGH</button></div>
+      <button class="btn ghost" id="goreBtn">BLOOD &amp; GORE: ON</button>
     </div></div>
   </div>
 
@@ -116,6 +117,7 @@ h2{font-family:var(--display);font-size:clamp(30px,9vw,40px);margin:0;color:var(
     <h2>PAUSED</h2>
     <button class="btn" id="resumeBtn">RESUME</button>
     <div class="row2"><button class="btn ghost" id="soundBtn2">SOUND: ON</button><button class="btn ghost" id="gfxBtn2">GRAPHICS: HIGH</button></div>
+    <button class="btn ghost" id="goreBtn2">BLOOD &amp; GORE: ON</button>
     <button class="btn ghost" id="quitBtn">QUIT</button>
   </div></div></div>
 
@@ -169,6 +171,7 @@ const save = { weapon: store.get('weapon', 'rifle'), map: store.get('map', 'auto
 function persist() { store.set('weapon', save.weapon); store.set('map', save.map); store.set('level', save.level); store.set('coins', save.coins); store.set('up', save.up); }
 
 /* ================= audio: recorded CC0 samples (see audio/CREDITS.md) ================= */
+let goreOn = store.get('gore', true); // OFF = kid-friendly: no blood, no severed body parts
 let AC = null, soundOn = store.get('sound', true), noiseBuf = null, master = null, reverbIn = null, voices = 0, ambienceSrc = null;
 const SAMPLES = {
   rifle: ['rifle-1', 'rifle-2', 'rifle-3', 'rifle-4'], smg: ['smg-1', 'smg-2', 'smg-3'], minigun: ['minigun-1', 'minigun-2', 'minigun-3'],
@@ -832,7 +835,7 @@ class Decals {
 }
 const bloodDecals = new Decals(splatterTex, 160, .28, .92), scorchDecals = new Decals(scorchTex, 30, .9, .8);
 const splatMesh = bloodDecals.mesh;
-function addSplat(x, z, r, color, grow = 0) { bloodDecals.add(x, z, r * 2.2, color, grow); }
+function addSplat(x, z, r, color, grow = 0) { if (!goreOn) return; bloodDecals.add(x, z, r * 2.2, color, grow); }
 function addScorch(x, z, r) { scorchDecals.add(x, z, r * 2.4, C.char); }
 const SPLAT_G = new THREE.Color('#4a0d08'), SPLAT_R = new THREE.Color('#5c0b07'), BLOOD = [new THREE.Color('#6a0c07'), new THREE.Color('#4f0a06'), new THREE.Color('#3d1a08')];
 const rings = [];
@@ -897,7 +900,7 @@ function buildGibs(data) {
 const _gq = new THREE.Quaternion(), _gw = new THREE.Vector3(), _gd = new THREE.Vector3(0, 0, 1);
 // throw one body part from a zombie: start where that part sits on the body, fly with (vx, vy, vz) and tumble
 function spawnGib(z, g, vx, vy, vz) {
-  if (!z.shirt) return;
+  if (!z.shirt || !goreOn) return;
   const G0 = gibMeshes[g]; if (!G0) return;
   if (gibs.length >= GIB_MAX * 3) gibs.shift();
   const sc = ZBASE * z.s, c = G0.center, cy = Math.cos(z.yaw), sy = Math.sin(z.yaw);
@@ -911,6 +914,7 @@ const dropMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(.02, .02, .085), 
 dropMesh.count = 0; dropMesh.frustumCulled = false; dropMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); dropMesh.setColorAt(0, WHITE); scene.add(dropMesh);
 const DROP_COLS = [new THREE.Color('#5a0805'), new THREE.Color('#470704'), new THREE.Color('#6b0f08')];
 function bleed(x, y, z, n, dirx, diry, dirz, spread, speed, size = 1) {
+  if (!goreOn) return;
   for (let i = 0; i < n; i++) {
     if (drops.length >= DROP_MAX) drops.shift();
     const sp = speed * rand(.4, 1.1);
@@ -919,7 +923,7 @@ function bleed(x, y, z, n, dirx, diry, dirz, spread, speed, size = 1) {
 }
 // arterial spray from a severed neck or limb, following the falling corpse
 const sprays = [];
-function addSpray(z, g) { sprays.push({ z, g, t: 0, life: g === 1 ? .9 : .5 }); }
+function addSpray(z, g) { if (!goreOn) return; sprays.push({ z, g, t: 0, life: g === 1 ? .9 : .5 }); }
 function bloodMist(x, y, z, green) {
   const c = green ? [.22, .36, .1] : [.38, .03, .02];
   for (let i = 0; i < 3; i++) smokeFx.add({ x: x + rand(-.2, .2), y: y + rand(-.2, .2), z, vx: rand(-1.2, 1.2), vy: rand(.2, 1.2), vz: rand(-.5, 1.5), size: rand(.35, .6), grow: 2.4, life: rand(.35, .6), drag: 4, r: c[0], g: c[1], b: c[2] });
@@ -1311,8 +1315,8 @@ function soldierWorld(s) { return [clamp(G.sx + s.ox, -HALF + .3, HALF - .3), G.
 function soldierDeathFX(s) {
   const [x, z] = soldierWorld(s);
   if (G.fallen.length < MAXFALLEN) G.fallen.push({ x, z, t: 0, tint: s.torso });
-  addDebris(x, 1, z, SPLAT_R, 4, 2.5);
-  for (let i = 0; i < 6; i++) sparks.add(x, .9, z, rand(-3, 3), rand(1, 4), rand(-3, 3), .4, C.red);
+  if (goreOn) addDebris(x, 1, z, SPLAT_R, 4, 2.5);
+  if (goreOn) for (let i = 0; i < 6; i++) sparks.add(x, .9, z, rand(-3, 3), rand(1, 4), rand(-3, 3), .4, C.red);
   addSplat(x, z, .45, SPLAT_R);
 }
 function killSoldier(idx) {
@@ -1325,7 +1329,7 @@ function killSoldier(idx) {
 /* ---------- zombies ---------- */
 function makeZombie(x, z, type) {
   const L = G ? G.L : 1;
-  const T = type === 'boss' ? { hp: G.bossHp, s: 4.4, spd: 1.25 } : type === 'brute' ? { hp: 14 + L * 5, s: 1.75, spd: rand(1.1, 1.5) } : { hp: 2 + L * .55, s: rand(.92, 1.08), spd: rand(1.3, 2.1) + L * .04 };
+  const T = type === 'boss' ? { hp: G.bossHp, s: 4.4 * (1 + Math.min(.6, (L - 1) * .06)), spd: 1.25 } /* tougher bosses on later levels are bigger too */ : type === 'brute' ? { hp: 14 + L * 5, s: 1.75, spd: rand(1.1, 1.5) } : { hp: 2 + L * .55, s: rand(.92, 1.08), spd: rand(1.3, 2.1) + L * .04 };
   return { x, z, type, hp: T.hp, maxHp: T.hp, s: T.s, spd: T.spd, phase: rand(0, TAU), flash: 0, dying: 0, bites: type === 'brute' ? 3 : 1,
     skin: new THREE.Color('#7f9a6e'), shirt: type === 'boss' ? BOSS_TINT : type === 'brute' ? BRUTE_TINT : pick(SHIRTS), yaw: Math.PI, idle: !!(G && G.preview), attack: false,
     model: (ZMODELS[type] && ZMODELS[type].length) ? pick(ZMODELS[type]) : (ZMODELS.walker.length ? pick(ZMODELS.walker) : ZOMB) };
@@ -1359,7 +1363,7 @@ function killZombie(z, cause = 'bullet', fx = z.x, fz = z.z + 5, hitY = 0) {
   }
   let dx = z.x - fx, dz = z.z - fz; const dl = Math.hypot(dx, dz) || 1; dx /= dl; dz /= dl; // direction the hit pushes the body
   if (cause === 'blast' && z.type !== 'boss') {
-    if (z.type === 'walker' || Math.random() < .5) {
+    if (goreOn && (z.type === 'walker' || Math.random() < .5)) {
       // blown apart: every body part flies outward from the blast, the body itself vanishes
       const force = rand(5, 9) / Math.sqrt(z.s);
       for (let g = 0; g <= 5; g++) spawnGib(z, g, dx * force + rand(-2.5, 2.5), rand(4, 9), dz * force + rand(-2.5, 2.5));
@@ -1371,10 +1375,10 @@ function killZombie(z, cause = 'bullet', fx = z.x, fz = z.z + 5, hitY = 0) {
     }
   } else if (z.type !== 'boss') {
     const r = Math.random();
-    if (r < (z.type === 'brute' ? .35 : .4)) { // headshot: the head pops off and blood sprays from the neck
+    if (goreOn && r < (z.type === 'brute' ? .35 : .4)) { // headshot: the head pops off and blood sprays from the neck
       z.mask |= 2; spawnGib(z, 1, dx * rand(1, 3) + rand(-1, 1), rand(4.5, 7), dz * rand(1, 3) + rand(-1, 1)); addSpray(z, 1);
       bleed(z.x, .86 * sc, z.z, 14, dx * .4, 1, dz * .4, 1.6, 4.5);
-    } else if (r < .62) { // an arm is shot off
+    } else if (goreOn && r < .62) { // an arm is shot off
       const g = Math.random() < .5 ? 2 : 3; z.mask |= 1 << g; spawnGib(z, g, dx * rand(1.5, 3.5) + rand(-1.5, 1.5), rand(2.5, 5), dz * rand(1.5, 3.5)); addSpray(z, g);
     }
     z.slide = cause === 'bullet' ? 2.4 : 1.2; z.slideX = dx; z.slideZ = dz; // knocked back as it falls
@@ -1746,7 +1750,7 @@ function sync(dt) {
   const pose = state === 'win' || G.preview ? 'victory' : G.phase === 'run' ? 'run' : 'walk';
   for (const s of G.soldiers) {
     const [x, z] = soldierWorld(s);
-    const R = s.hero && HEROM ? HEROM : SOLD, sc = SBASE * (R.scale || 1) * (s.hero ? 1.4 : 1) * easeBack(s.pop);
+    const R = s.hero && HEROM ? HEROM : SOLD, sc = SBASE * (R.scale || 1) * (s.hero ? 1.2 : 1) * easeBack(s.pop);
     const t = pose === 'walk' ? .05 : pose === 'victory' ? s.phase * .3 : s.phase / 11;
     pushInst(R, x, 0, z, 0, sc, pose, t, s.hero ? HERO.torso : s.torso, s.hero ? 2 : WEAPONS[G.weapon].part, 0);
     pushBlob(x, z, sc * .62);
@@ -1884,7 +1888,8 @@ function refreshLoadout() {
   $('mapBtn').textContent = 'MAP: ' + (save.map === 'auto' ? 'AUTO' : THEMES[save.map].name.split(' ').pop());
 }
 function refreshSound() { const t = 'SOUND: ' + (soundOn ? 'ON' : 'OFF'); $('soundBtn').textContent = t; $('soundBtn2').textContent = t;
-  const g = 'GRAPHICS: ' + (hiQ ? 'HIGH' : 'LOW'); $('gfxBtn').textContent = g; $('gfxBtn2').textContent = g; }
+  const g = 'GRAPHICS: ' + (hiQ ? 'HIGH' : 'LOW'); $('gfxBtn').textContent = g; $('gfxBtn2').textContent = g;
+  const b = 'BLOOD & GORE: ' + (goreOn ? 'ON' : 'OFF'); $('goreBtn').textContent = b; $('goreBtn2').textContent = b; }
 function setQuality(high) { // LOW: no bloom/post, no character shadows, smaller shadow map, lower resolution
   hiQ = high; store.set('gfx', high ? 'high' : 'low');
   if (SOLD) SOLD.mesh.castShadow = high; if (HEROM) HEROM.mesh.castShadow = high; if (ZOMB) ZOMB.mesh.castShadow = high; for (const R of ZALL) R.mesh.castShadow = high; for (const m of gibMeshes) if (m) m.mesh.castShadow = high;
@@ -1932,6 +1937,7 @@ $('pauseBtn').onclick = togglePause; $('resumeBtn').onclick = togglePause;
 $('soundBtn').onclick = $('soundBtn2').onclick = () => { ensureAudio(); setSound(!soundOn); store.set('sound', soundOn); refreshSound(); };
 $('wpnBtn').onclick = () => { const list = WEAPON_ORDER.filter(weaponUnlocked); save.weapon = list[(list.indexOf(save.weapon) + 1) % list.length]; persist(); refreshLoadout(); ensureAudio(); sfx.weapon(save.weapon); if (list.length === 1) banner('SHOTGUN', 'UNLOCKS AT LEVEL 2', 1400); };
 $('mapBtn').onclick = () => { const opts = ['auto', ...THEME_ORDER]; save.map = opts[(opts.indexOf(save.map) + 1) % opts.length]; persist(); refreshLoadout(); newGame(save.level, true); banner(THEMES[themeFor(save.level)].name, save.map === 'auto' ? 'CHANGES EVERY LEVEL' : 'SELECTED MAP', 1200); };
+$('goreBtn').onclick = $('goreBtn2').onclick = () => { goreOn = !goreOn; store.set('gore', goreOn); refreshSound(); if (!goreOn) { drops.length = 0; sprays.length = 0; gibs.length = 0; bloodDecals.clear(); } };
 $('gfxBtn').onclick = $('gfxBtn2').onclick = () => { store.set('gfxChosen', true); setQuality(!hiQ); };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state === 'play') togglePause(); if (!document.hidden && state === 'play') requestWake(); });
 
