@@ -1217,9 +1217,9 @@ const POWER = {
   magnet:  { label: 'SALVAGE MAGNET', short: 'MAGNET', col: '#ff6fb1', dur: 6, unlock: 4, token: 1, hint: 'CRATES AHEAD BREAK OPEN BY THEMSELVES' },
   double:  { label: 'GATE BOOST', short: 'GATE x2', col: '#ffc531', dur: 15, unlock: 5, token: 1, hint: 'YOUR NEXT BLUE GATE COUNTS TWICE' },
   turret:  { label: 'SENTRY GUN', short: 'SENTRY', col: '#9dff6a', dur: 9, unlock: 6, crate: 1, hint: 'AN AUTO-TURRET FIGHTS BESIDE YOU' },
-  w_shotgun: { label: 'SHOTGUNS', short: 'SHOTGUN', col: '#ffb15a', dur: 0 },
-  w_rocket:  { label: 'ROCKET LAUNCHERS', short: 'ROCKETS', col: '#ff5a3d', dur: 0 },
-  w_flamer:  { label: 'FLAMETHROWERS', short: 'FLAMER', col: '#ff8a1f', dur: 0 }
+  w_shotgun: { label: 'SHOTGUNS', short: 'SHOTGUN', col: '#ffb15a', dur: 0, unlock: 1, crate: 1 },
+  w_rocket:  { label: 'ROCKET LAUNCHERS', short: 'ROCKETS', col: '#ff5a3d', dur: 0, unlock: 1, crate: 1 },
+  w_flamer:  { label: 'FLAMETHROWERS', short: 'FLAMER', col: '#ff8a1f', dur: 0, unlock: 2, crate: 1 }
 };
 // squad weapons. rate is relative to the rifle; part selects the gun baked into the soldier model
 const WEAPONS = {
@@ -1350,7 +1350,7 @@ const unlockedPowers = (L, carrier) => Object.keys(POWER).filter(k => POWER[k][c
 function genLevel(L) {
   let z = -34, E = G.st.men, slot = 0; const end = -G.len + 30;
   // a power-up new on this level shows up early (first crate or token), so the player meets it straight away
-  let introCrate = unlockedPowers(L, 'crate').find(k => POWER[k].unlock === L && !POWER[k].token), introToken = unlockedPowers(L, 'token').find(k => POWER[k].unlock === L);
+  let introCrate = unlockedPowers(L, 'crate').find(k => POWER[k].unlock === L && !POWER[k].token && !k.startsWith('w_')), introToken = unlockedPowers(L, 'token').find(k => POWER[k].unlock === L);
   const tokenPool = unlockedPowers(L, 'token');
   while (z > end) {
     const good = (E < 14 && Math.random() < .25) ? { kind: 'mul', v: E < 6 && Math.random() < .3 ? 3 : 2 } : { kind: 'add', v: Math.round(rand(4, 8) + L * 1.2) };
@@ -1363,10 +1363,11 @@ function genLevel(L) {
     E = good.kind === 'mul' ? Math.min(MAXS, E * good.v) : E + good.v;
     z -= 15;
     let crateX = null;
-    if (introCrate || Math.random() < .7) {
-      const type = introCrate || pick(['rapid', 'rapid', 'spread', 'shield', 'freeze', 'strike', 'recruit', 'w_shotgun', 'w_rocket', 'w_rocket', 'w_flamer', 'power', 'turret'].filter(k => POWER[k].unlock <= L));
-      introCrate = null; crateX = rand(-3.2, 3.2);
-      G.crates.push(makeCrate(crateX, z, type, Math.round(10 + L * 4 + E * .6))); // a squad of 8 breaks one in a second or two
+    const heavy = slot === 1 ? (L === 1 ? 'w_rocket' : L === 2 ? 'w_flamer' : pick(['w_rocket', 'w_flamer', 'w_rocket', 'w_shotgun'])) : null; // every level hands out a heavy weapon early
+    if (heavy || introCrate || Math.random() < .7) {
+      const type = heavy || introCrate || pick(['rapid', 'rapid', 'spread', 'shield', 'freeze', 'strike', 'recruit', 'w_shotgun', 'w_rocket', 'w_rocket', 'w_flamer', 'power', 'turret'].filter(k => POWER[k].unlock <= L));
+      if (!heavy) introCrate = null; crateX = rand(-3.2, 3.2);
+      G.crates.push(makeCrate(crateX, z, type, Math.round((heavy ? .6 : 1) * (10 + L * 4 + E * .6)))); // a squad of 8 breaks one in a second or two
     }
     // power tokens stand just before a horde, off to one side: steer over to take one
     if (introToken || (slot > 0 && Math.random() < .42)) {
@@ -1416,7 +1417,7 @@ function soldierDeathFX(s) {
 function killSoldier(idx) {
   if (!G.soldiers[idx]) return;
   if (G.soldiers[idx].hero && G.soldiers.length > 1) idx = G.soldiers.length - 1; // the hero falls last
-  soldierDeathFX(G.soldiers[idx]); G.soldiers.splice(idx, 1);
+  soldierDeathFX(G.soldiers[idx]); G.soldiers.splice(idx, 1); G.lost = (G.lost || 0) + 1;
   layoutSquad(); G.bubblePop = .6; sfx.hurt(); G.hurt = Math.min(1, G.hurt + .35); G.lossAcc++;
 }
 
@@ -1424,7 +1425,7 @@ function killSoldier(idx) {
 const zScale = z => ZBASE * z.s * ((z.model && z.model.scale) || 1); // world size of a zombie, including its model's own scale
 function makeZombie(x, z, type) {
   const L = G ? G.L : 1;
-  const T = type === 'boss' ? { hp: G.bossHp, s: 4.4 * (1 + Math.min(.6, (L - 1) * .06)), spd: 1.25 } /* tougher bosses on later levels are bigger too */ : type === 'brute' ? { hp: 14 + L * 5, s: 1.75, spd: rand(1.1, 1.5) } : { hp: 2 + L * .55, s: rand(.92, 1.08), spd: rand(1.3, 2.1) + L * .04 };
+  const T = type === 'boss' ? { hp: G.bossHp, s: 4.4 * (1 + Math.min(.6, (L - 1) * .06)), spd: 1.25 } /* tougher bosses on later levels are bigger too */ : type === 'brute' ? { hp: 14 + L * 5, s: 1.75, spd: rand(1.1, 1.5) } : { hp: 4 + L * 1.5 + L * L * .03, s: rand(.92, 1.08), spd: rand(1.3, 2.1) + L * .06 } /* tougher and quicker every level */;
   return { x, z, type, hp: T.hp, maxHp: T.hp, s: T.s, spd: T.spd, phase: rand(0, TAU), flash: 0, dying: 0, bites: type === 'brute' ? 3 : 1,
     skin: new THREE.Color('#7f9a6e'), shirt: type === 'boss' ? BOSS_TINT : type === 'brute' ? BRUTE_TINT : pick(SHIRTS), yaw: Math.PI, idle: !!(G && G.preview), attack: false,
     model: (ZMODELS[type] && ZMODELS[type].length) ? pick(ZMODELS[type]) : (ZMODELS.walker.length ? pick(ZMODELS.walker) : ZOMB) };
@@ -1433,13 +1434,13 @@ function spawnHorde(h) {
   h.spawned = true;
   // hordes scale with the squad you actually have, so every horde is a real fight
   const first = G.hordes.indexOf(h) === 0 ? .7 : 1;
-  const want = Math.round((G.soldiers.length * rand(.9, 1.2) * (1 + G.L * .05) + G.L + 2) * first * 1.15); // a spread-out mob is easier to hit than a single file, so it comes a little bigger
+  const want = Math.round((G.soldiers.length * rand(.9, 1.2) * (1.6 + G.L * .12) + G.L * 2 + 4) * first * 1.15); // a spread-out mob is easier to hit than a single file, so it comes a little bigger
   const n = clamp(want, 6, MAXZ - G.zombies.length - 8);
   // the horde comes as a few big clumps spread across the road, each a loose mob that moves together
   const nc = n < 14 ? 1 : n < 36 ? (Math.random() < .5 ? 1 : 2) : n < 80 ? 2 + (Math.random() < .4) : 3, clumps = [];
   for (let k = 0; k < nc; k++) {
     const lane = nc === 1 ? rand(-1.2, 1.2) : -HALF + 1.4 + (k + rand(.3, .7)) / nc * (ROAD_W - 2.8);
-    clumps.push({ x: lane, z: h.z - rand(0, 2 + n * .04), spd: rand(1.35, 2.05) + G.L * .04, m: 0 });
+    clumps.push({ x: lane, z: h.z - rand(0, 2 + n * .04), spd: rand(1.35, 2.05) + G.L * .06, m: 0 });
   }
   for (let i = 0; i < n; i++) clumps[Math.floor(Math.random() * nc)].m++;
   h.clumps = clumps;
@@ -1530,7 +1531,7 @@ function rocketBoom(r, direct) {
   r.dead = true;
   explosion(r.x, .55, r.z, 1.7, false); sfx.rocketPop(r.x, r.z); G.shake = Math.max(G.shake, .18);
   if (direct) hurtZombie(direct, r.dmg, 'blast', r.x, r.z + 1);
-  blast(r.x, r.z, 2.4, r.dmg * 1.1);
+  blast(r.x, r.z, 2.1, r.dmg * .6);
   for (const c of G.crates) if (!c.dead && Math.abs(c.x - r.x) < 2 && Math.abs(c.z - r.z) < 2) { c.hp -= r.dmg * 2; c.dirty = 1; c.flash = .06; if (c.hp <= 0) crateBreak(c); }
 }
 function updateRockets(dt) {
@@ -1581,7 +1582,7 @@ function applyGate(spec, x) {
     G.pw.double = 0; spec = spec.kind === 'add' ? { kind: 'add', v: spec.v * 2 } : { kind: 'mul', v: spec.v + 1 };
     floatText('BOOST!', G.sx, 4.2, G.sz - 1, POWER.double.col, 30); sfx.boost(); addRing(G.sx, G.sz, G.R + 3, POWER.double.col, .6);
   }
-  const after = clamp(spec.kind === 'add' ? before + spec.v : spec.kind === 'mul' ? before * spec.v : Math.ceil(before / spec.v), 0, MAXS);
+  const after = clamp(spec.kind === 'add' ? before + spec.v : spec.kind === 'mul' ? before * spec.v : Math.ceil(before / spec.v), Math.min(1, before), MAXS); // a red gate hurts but never wipes the squad on its own
   setSquadCount(after);
   floatText(gateText(spec), G.sx, 3, G.sz - 1, gateGood(spec) ? '#7cc4ff' : '#ff8a7a', 34);
   if (after >= before) sfx.good(); else sfx.bad();
@@ -1708,8 +1709,8 @@ function update(dt) {
       if (target && (s.hero || Math.random() < p)) {
         const [x, z] = soldierWorld(s), sc = s.hero ? 1.45 : 1, aim = G.boss && !G.boss.dying && G.phase === 'boss' ? G.boss : bigT && (s.hero || s.ab < .65) ? bigT : crateT && Math.abs(crateT.x - x) < 2.6 ? crateT : null; // soldiers near a crate's lane aim at it
         if (s.hero || wk === 'rifle') fire(x + .05 * sc, z - .7 * sc, s.hero ? st.dmg * 1.5 : st.dmg / p, s.hero, aim);
-        else if (wk === 'shotgun') { for (let k = 0; k < 5; k++) addBullet(x + .05, z - .7, rand(-.2, .2) + (aim ? clamp(Math.atan2(aim.x - x, Math.max(2, z - aim.z)), -.45, .45) : 0), st.dmg * .78 / p, false, false, 'pellet', 19); }
-        else if (wk === 'rocket') addRocket(x + .05, z - .8, target, st.dmg * 2.6 / p);
+        else if (wk === 'shotgun') { for (let k = 0; k < 5; k++) addBullet(x + .05, z - .7, rand(-.2, .2) + (aim ? clamp(Math.atan2(aim.x - x, Math.max(2, z - aim.z)), -.45, .45) : 0), st.dmg * .95 / p, false, false, 'pellet', 21); }
+        else if (wk === 'rocket') addRocket(x + .05, z - .8, target, st.dmg * 2.2 / p);
         else if (wk === 'flamer') flamePuff(x + .05, z - .75, sc);
         fired++; if (s.hero) heroFired = true;
         if (wk !== 'flamer' || s.hero) if (s.hero || Math.random() < (wk === 'shotgun' ? .8 : .3)) muzzle.add(x + .05 * sc, .72 * sc, z - (s.hero ? 1.05 : .75) * sc, 0, 0, -2, s.hero ? .06 : wk === 'shotgun' ? .07 : .045, C.spark);

@@ -32,7 +32,7 @@ The **MAP** button in the Armory picks a map, or AUTO to change map every level.
 | Rocket launcher | level 3 | Real rockets with smoke trails; the blast blows zombies apart |
 | Flamethrower | level 4 | A long jet of fire that reaches about 12 m ahead, splashes burning fuel on the road and sets zombies burning until they char |
 
-The **WEAPON** button in the Armory sets the starting weapon. Weapon crates on the road switch the whole squad's weapon for the rest of the level. The squad leader always carries the minigun.
+The **WEAPON** button in the Armory sets the starting weapon. Weapon crates on the road switch the whole squad's weapon for the rest of the level. Every level has a heavy weapon crate early on: rockets on level 1, flamethrowers on level 2, then a rocket, flamer or shotgun crate. The squad leader always carries the minigun.
 
 ### Power-ups
 
@@ -44,7 +44,8 @@ Power-ups come two ways. **Crates** stand on the road: shoot one until its numbe
 | Spread Shot | 1 | crate | Every shot fires three bullets for 8 seconds |
 | Shield | 1 | token, crate | Zombies die on contact instead of taking soldiers, 7 seconds |
 | Reinforcements | 1 | crate | Instant extra soldiers |
-| Shotgun / Rockets / Flamer | 1 | crate | Switch the squad to that weapon |
+| Shotgun / Rockets | 1 | crate | Switch the squad to that weapon |
+| Flamer | 2 | crate | Switch the squad to flamethrowers |
 | Hollow Points | 2 | token, crate | Double damage for 7 seconds, bigger red tracers |
 | Airstrike | 2 | crate | A line of explosions sweeps the road ahead |
 | Freeze | 3 | crate | Zombies slow to a crawl for 6 seconds |
@@ -54,6 +55,8 @@ Power-ups come two ways. **Crates** stand on the road: shoot one until its numbe
 | Sentry Gun | 6 | crate | An auto-turret rolls beside the squad for 9 seconds and fires at the biggest zombie in range |
 
 ### Fighting the horde
+
+- **Difficulty climbs every level.** Walkers get tougher and quicker and hordes get bigger each level, so late levels need upgrades, good gates and a heavy weapon. A red gate hurts but never wipes out the squad by itself.
 
 - The squad marches at a steadier pace, and **holds its ground** when a brute gets within a few metres, fighting it out before moving on. A "HOLD!" call shows the first time.
 - **Brutes draw the fire.** When a brute is in range, the squad leader and about two thirds of the squad aim at it; the rest keep shooting the nearest walkers.
