@@ -515,10 +515,23 @@ async function loadVAT(name, max, opts = {}) {
     buf = all.buffer;
   }
   const o = meta.offs, V = meta.V;
-  const vat = new Uint16Array(buf, o.vat, meta.W * meta.rows * meta.frames * 4);
+  // packed models (bake PACK=1): one RG32UI texel per vertex per frame, position 11/11/10 bits in the clip box + octahedral normal
+  const PK = meta.pack, NT = meta.W * meta.rows * meta.frames;
+  const vat = PK ? new Uint32Array(buf, o.pk, NT * 2) : new Uint16Array(buf, o.vat, NT * 4);
+  const rd = PK ? (t, k) => { const p = vat[t * 2]; return PK.min[k] + (k === 0 ? p & 2047 : k === 1 ? (p >>> 11) & 2047 : p >>> 22) / (k < 2 ? 2047 : 1023) * PK.size[k]; }
+    : (t, k) => THREE.DataUtils.fromHalfFloat(vat[t * 4 + k]);
+  const gl3 = v => v.map(x => x.toFixed(6)).join(', ');
+  const SAMP = PK ? 'usampler2D' : 'sampler2D', AT = `ivec2(v % ${meta.W}, f * ${meta.rows} + v / ${meta.W})`;
+  const VATF = PK ? `vec3 vatFetch(float fr) { int v = gl_VertexID; int f = int(fr + .5); uint p = texelFetch(vatTex, ${AT}, 0).x;
+  return vec3(${gl3(PK.min)}) + vec3(float(p & 2047u) / 2047., float((p >> 11u) & 2047u) / 2047., float(p >> 22u) / 1023.) * vec3(${gl3(PK.size)}); }`
+    : `vec3 vatFetch(float fr) { int v = gl_VertexID; int f = int(fr + .5); return texelFetch(vatTex, ${AT}, 0).xyz; }`;
+  const NVATF = PK ? `vec3 nvatFetch(float fr) { int v = gl_VertexID; int f = int(fr + .5); uint q = texelFetch(nvatTex, ${AT}, 0).y;
+  vec2 e = vec2(float(q & 65535u), float(q >> 16u)) / 65535. * 2. - 1.; vec3 n = vec3(e, 1. - abs(e.x) - abs(e.y)); float t = max(-n.z, 0.);
+  n.x += n.x >= 0. ? -t : t; n.y += n.y >= 0. ? -t : t; return normalize(n); }`
+    : `vec3 nvatFetch(float fr) { int v = gl_VertexID; int f = int(fr + .5); return texelFetch(nvatTex, ${AT}, 0).xyz * 2. - 1.; }`;
   const g = new THREE.BufferGeometry();
   const pos = new Float32Array(V * 3);
-  for (let i = 0; i < V; i++) for (let k = 0; k < 3; k++) pos[i * 3 + k] = THREE.DataUtils.fromHalfFloat(vat[i * 4 + k]);
+  for (let i = 0; i < V; i++) for (let k = 0; k < 3; k++) pos[i * 3 + k] = rd(i, k);
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   const c8 = new Uint8Array(buf, o.col, V * 3), col = new Float32Array(V * 3);
   for (let i = 0; i < V; i++) { _c.setRGB(c8[i * 3] / 255, c8[i * 3 + 1] / 255, c8[i * 3 + 2] / 255, THREE.SRGBColorSpace); col[i * 3] = _c.r; col[i * 3 + 1] = _c.g; col[i * 3 + 2] = _c.b; }
@@ -531,7 +544,9 @@ async function loadVAT(name, max, opts = {}) {
   const dyn = (n, k, fill = 0) => new THREE.InstancedBufferAttribute(new Float32Array(n * k).fill(fill), k).setUsage(THREE.DynamicDrawUsage);
   const iAnim = dyn(max, 3), iTint = dyn(max, 3, 1), iFx = dyn(max, 3); // iFx: weapon variant, hit flash, hidden body-part mask
   g.setAttribute('iAnim', iAnim); g.setAttribute('iTint', iTint); g.setAttribute('iFx', iFx);
-  const tex = new THREE.DataTexture(vat, meta.W, meta.rows * meta.frames, THREE.RGBAFormat, THREE.HalfFloatType);
+  const tex = PK ? new THREE.DataTexture(vat, meta.W, meta.rows * meta.frames, THREE.RGIntegerFormat, THREE.UnsignedIntType)
+    : new THREE.DataTexture(vat, meta.W, meta.rows * meta.frames, THREE.RGBAFormat, THREE.HalfFloatType);
+  if (PK) tex.internalFormat = 'RG32UI';
   tex.minFilter = tex.magFilter = THREE.NearestFilter; tex.generateMipmaps = false; tex.needsUpdate = true;
   // textured models (tools/bake/bake_mixamo.py) also carry texture coordinates and a baked normal per vertex per frame
   const textured = !!(o.uv !== undefined && meta.tex);
@@ -539,12 +554,14 @@ async function loadVAT(name, max, opts = {}) {
   if (textured) {
     g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(buf, o.uv, V * 2), 2));
     g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(V * 3), 3));
-    nTex = new THREE.DataTexture(new Uint8Array(buf, o.nvat, meta.W * meta.rows * meta.frames * 4), meta.W, meta.rows * meta.frames, THREE.RGBAFormat, THREE.UnsignedByteType);
-    nTex.minFilter = nTex.magFilter = THREE.NearestFilter; nTex.generateMipmaps = false; nTex.needsUpdate = true;
+    if (PK) nTex = tex; else {
+      nTex = new THREE.DataTexture(new Uint8Array(buf, o.nvat, NT * 4), meta.W, meta.rows * meta.frames, THREE.RGBAFormat, THREE.UnsignedByteType);
+      nTex.minFilter = nTex.magFilter = THREE.NearestFilter; nTex.generateMipmaps = false; nTex.needsUpdate = true; }
     map = await new THREE.TextureLoader().loadAsync(`models/${meta.tex}`); map.colorSpace = THREE.SRGBColorSpace; map.flipY = false; map.anisotropy = maxAniso;
     // models from tools/bake/rig_sketchfab.py can carry a tangent-space normal map (read per pixel, no tangents needed)
     if (meta.ntex && !opts.noNormals) try { nMap = await new THREE.TextureLoader().loadAsync(`models/${meta.ntex}`); nMap.flipY = false; nMap.colorSpace = THREE.NoColorSpace; nMap.anisotropy = maxAniso; } catch (e) { nMap = null; }
   }
+  meta.hasRoar = !!meta.clips.roar; if (!meta.clips.roar) meta.clips.roar = meta.clips.punch;
   for (const k of ['walk', 'run', 'punch', 'death', 'hit']) if (!meta.clips[k]) meta.clips[k] = meta.clips.walk || Object.values(meta.clips)[0]; // missing clips fall back to walking
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: !textured, map, normalMap: nMap, roughness: textured ? .82 : .7, metalness: .05, side: opts.gore ? THREE.DoubleSide : THREE.FrontSide });
   mat.onBeforeCompile = sh => {
@@ -552,8 +569,8 @@ async function loadVAT(name, max, opts = {}) {
     if (textured) {
       sh.uniforms.nvatTex = { value: nTex };
       sh.vertexShader = sh.vertexShader.replace('#include <common>', `#include <common>
-uniform highp sampler2D nvatTex; varying float vFlash;
-vec3 nvatFetch(float fr) { int v = gl_VertexID; int f = int(fr + .5); return texelFetch(nvatTex, ivec2(v % ${meta.W}, f * ${meta.rows} + v / ${meta.W}), 0).xyz * 2. - 1.; }`)
+uniform highp ${SAMP} nvatTex; varying float vFlash;
+${NVATF}`)
         .replace('#include <beginnormal_vertex>', 'vec3 objectNormal = normalize(mix(nvatFetch(iAnim.x), nvatFetch(iAnim.y), iAnim.z));')
         .replace('#include <color_vertex>', '#include <color_vertex>\nvFlash = iFx.y;');
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vFlash;')
@@ -562,9 +579,9 @@ vec3 nvatFetch(float fr) { int v = gl_VertexID; int f = int(fr + .5); return tex
     }
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
-uniform highp sampler2D vatTex;
+uniform highp ${SAMP} vatTex;
 attribute vec3 iAnim; attribute vec3 iTint; attribute vec3 iFx; attribute float aTint; attribute float aPart; attribute float aGroup;
-vec3 vatFetch(float fr) { int v = gl_VertexID; int f = int(fr + .5); return texelFetch(vatTex, ivec2(v % ${meta.W}, f * ${meta.rows} + v / ${meta.W}), 0).xyz; }`)
+${VATF}`)
       .replace('#include <begin_vertex>', `vec3 transformed = mix(vatFetch(iAnim.x), vatFetch(iAnim.y), iAnim.z);
 if (aPart > .5 && abs(aPart - iFx.x) > .5) transformed = vec3(0.);
 if (((int(iFx.z + .5) >> int(aGroup + .5)) & 1) == 1) transformed = vec3(0.); // severed body part`)
@@ -579,15 +596,15 @@ vColor.rgb = iFx.y >= 0. ? mix(vColor.rgb, vec3(1., .82, .78), iFx.y) : mix(vCol
       #include <opaque_fragment>`);
   };
   // the shaders inline this model's texture layout, so models must not share a compiled program
-  const layoutKey = `vat-${meta.W}-${meta.rows}-${textured ? 'tex' : 'col'}${nMap ? '-nm' : ''}`; mat.customProgramCacheKey = () => layoutKey;
+  const layoutKey = `vat-${meta.W}-${meta.rows}-${textured ? 'tex' : 'col'}${nMap ? '-nm' : ''}${PK ? '-pk-' + name : ''}`; mat.customProgramCacheKey = () => layoutKey;
   const depthMat = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, side: opts.gore ? THREE.DoubleSide : THREE.FrontSide });
   depthMat.customProgramCacheKey = () => layoutKey;
   depthMat.onBeforeCompile = sh => {
     sh.uniforms.vatTex = { value: tex };
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
-uniform highp sampler2D vatTex; attribute vec3 iAnim; attribute vec3 iFx; attribute float aPart; attribute float aGroup;
-vec3 vatFetch(float fr) { int v = gl_VertexID; int f = int(fr + .5); return texelFetch(vatTex, ivec2(v % ${meta.W}, f * ${meta.rows} + v / ${meta.W}), 0).xyz; }`)
+uniform highp ${SAMP} vatTex; attribute vec3 iAnim; attribute vec3 iFx; attribute float aPart; attribute float aGroup;
+${VATF}`)
       .replace('#include <begin_vertex>', `vec3 transformed = mix(vatFetch(iAnim.x), vatFetch(iAnim.y), iAnim.z);
 if (aPart > .5 && abs(aPart - iFx.x) > .5) transformed = vec3(0.);
 if (((int(iFx.z + .5) >> int(aGroup + .5)) & 1) == 1) transformed = vec3(0.); // severed body part`);
@@ -597,14 +614,14 @@ if (((int(iFx.z + .5) >> int(aGroup + .5)) & 1) == 1) transformed = vec3(0.); //
   // where each body part (0 torso, 1 head, 2-3 arms, 4-5 legs) sits in every frame, so a first-person shot can find the real head
   let parts = null, headR = 0;
   if (o.group !== undefined) {
-    const grp = new Uint8Array(buf, o.group, V), F = meta.frames, step = meta.rows * meta.W, cnt = new Float32Array(6), h = THREE.DataUtils.fromHalfFloat;
+    const grp = new Uint8Array(buf, o.group, V), F = meta.frames, step = meta.rows * meta.W, cnt = new Float32Array(6);
     parts = new Float32Array(F * 18);
     for (let v = 0; v < V; v++) if (grp[v] < 6) cnt[grp[v]]++;
     const idx = []; for (let v = 0; v < V; v += 3) if (grp[v] < 6) idx.push(v); // every third vertex is plenty for a centroid
     const cs = new Float32Array(6); for (const v of idx) cs[grp[v]]++;
-    for (let f = 0; f < F; f++) for (const v of idx) { const g = grp[v], b = (f * step + v) * 4, q = f * 18 + g * 3;
-      parts[q] += h(vat[b]) / cs[g]; parts[q + 1] += h(vat[b + 1]) / cs[g]; parts[q + 2] += h(vat[b + 2]) / cs[g]; }
-    for (const v of idx) if (grp[v] === 1) headR = Math.max(headR, Math.hypot(h(vat[v * 4]) - parts[3], h(vat[v * 4 + 1]) - parts[4], h(vat[v * 4 + 2]) - parts[5]));
+    for (let f = 0; f < F; f++) for (const v of idx) { const g = grp[v], b = f * step + v, q = f * 18 + g * 3;
+      parts[q] += rd(b, 0) / cs[g]; parts[q + 1] += rd(b, 1) / cs[g]; parts[q + 2] += rd(b, 2) / cs[g]; }
+    for (const v of idx) if (grp[v] === 1) headR = Math.max(headR, Math.hypot(rd(v, 0) - parts[3], rd(v, 1) - parts[4], rd(v, 2) - parts[5]));
     if (!cs[1]) parts = null;
   }
   return { meta, mesh, iAnim, iTint, iFx, clips: meta.clips, n: 0, max, parts, headR, maps: [tex, nTex, map, nMap].filter(Boolean), depthMat };
@@ -1584,9 +1601,10 @@ function spawnHorde(h) {
       zb.grp = c; zb.ox = ox; zb.spd = c.spd * rand(.94, 1.06); G.zombies.push(zb);
     }
   }
-  for (let i = 0; i < h.brutes; i++) { // brutes lumber along at the back of a clump
-    const c = clumps[i % nc], zb = makeZombie(clamp(c.x + rand(-1, 1), -HALF + .6, HALF - .6), c.z - rand(2.5, 4.5), 'brute');
-    zb.grp = c; zb.ox = zb.x - c.x; G.zombies.push(zb);
+  for (let i = 0; i < h.brutes; i++) { // big zombies come on their own, well behind the horde and spaced apart, so each one is its own fight
+    const back = Math.min(...clumps.map(c => c.z)) - rand(10, 14) - i * rand(6, 9);
+    const zb = makeZombie(h.brutes === 1 ? rand(-1.5, 1.5) : -HALF + 1.6 + (i % 2 ? .7 : .3) * (ROAD_W - 3.2) + rand(-.6, .6), back, 'brute');
+    G.zombies.push(zb);
   }
 }
 // cause: 'bullet' | 'blast' | 'contact'; (fx, fz) = where the hit came from
@@ -1596,6 +1614,10 @@ function hurtZombie(z, dmg, cause = 'bullet', fx = z.x, fz = z.z + 5, hitY = 0) 
   if (z.bt && z.bt.res[cause]) dmg *= 1 - z.bt.res[cause];
   z.hp -= dmg; z.flash = .06;
   if (z.hp <= 0) { killZombie(z, cause, fx, fz, hitY); return; }
+  if (z.type === 'boss') { // bosses rock back a little from every hit, and stagger from heavy ones (rockets, or a big chunk of health)
+    z.hp0 = z.hp0 || z.hp + dmg; z.recoil = Math.min(1, (z.recoil || 0) + (cause === 'blast' ? .9 : .05));
+    if (z.flinch <= 0 && !z.roarT && (cause === 'blast' || dmg > z.hp0 * .035)) { z.hitT = .6; z.flinch = 2.4; z.kb = cause === 'blast' ? 1.4 : .7; }
+  }
   if (z.type !== 'boss' && z.flinch <= 0) { // stagger: play the hit reaction and get knocked back a step
     z.hitT = .42; z.flinch = z.type === 'brute' ? 1.1 : .55; z.kb = z.type === 'brute' ? .6 : 1.8;
   }
@@ -2199,6 +2221,14 @@ function update(dt) {
     const dx = G.sx - z.x, dz = G.sz - z.z;
     let spd = z.spd * slow * (z.hitT > 0 ? .35 : 1);
     if (z.type === 'boss' && G.phase === 'run') spd = 0;
+    if (z.type === 'boss' && G.phase === 'boss') {
+      z.hp0 = z.hp0 || z.hp; z.recoil = Math.max(0, (z.recoil || 0) - dt * 3); z.lunge = Math.max(0, (z.lunge || 0) - dt * 2.2);
+      if (z.roarT === undefined) z.roarT = 2.1; // squares up and roars before it comes at you
+      if (!z.enraged && z.hp < z.hp0 * .5) { z.enraged = true; z.roarT = 1.7; z.spd *= 1.12; sfx.roar(); G.shake = Math.max(G.shake, .5); }
+      if (z.roarT > 0) { z.roarT = Math.max(0, z.roarT - dt); spd = 0; if (z.roarT === 0) z.roarT = null; }
+      else if (z.chargeT > 0) { z.chargeT -= dt; spd *= 3.1; G.shake = Math.max(G.shake, .18); }
+      else if (G.sz - z.z > 9 && z.hitT <= 0 && Math.random() < dt * .3) { z.chargeT = rand(.8, 1.2); sfx.roar(); } // charges across the gap
+    }
     let vx;
     if (z.grp) { // part of a clump: keep its place in the mob, and only close in on the squad over the last few metres
       const c = z.grp, near = clamp((9 - dz) / 7, 0, 1);
@@ -2219,8 +2249,8 @@ function update(dt) {
       z.attack = z.z > G.sz - G.R - stand - 1.4;
       if (z.z > G.sz - G.R - stand) {
         z.z = G.sz - G.R - stand; G.stompT -= dt;
-        if (G.stompT <= 0) {
-          G.stompT = .9; G.shake = Math.max(G.shake, .7); sfx.stomp(); addRing(z.x, z.z + 1.5, 4.5, '#ff8a5a', .5); explosion(z.x, .2, z.z + 1.6, 1.5);
+        if (G.stompT <= 0 && !(z.roarT > 0)) {
+          G.stompT = .9; G.shake = Math.max(G.shake, .7); z.lunge = 1; // lunges forward with the strike sfx.stomp(); addRing(z.x, z.z + 1.5, 4.5, '#ff8a5a', .5); explosion(z.x, .2, z.z + 1.6, 1.5);
           if (G.pw.shield > 0) G.pw.shield = Math.max(0, G.pw.shield - 2);
           else for (let i = 0, n = Math.max(1, Math.round((2 + Math.floor(G.L / 3)) * z.bt.stomp)); i < n && G.soldiers.length; i++) killSoldier(Math.floor(Math.random() * G.soldiers.length));
         }
@@ -2370,12 +2400,21 @@ function sync(dt) {
     let clip, at;
     if (z.mask === 63) continue; // blown to pieces
     if (z.dying) { clip = 'death'; at = z.dying * 1.7; }
-    else if (z.hitT > 0) { clip = 'hit'; at = (.42 - z.hitT) * 1.5; }
-    else if (z.attack) { clip = 'punch'; at = z.phase * (z.type === 'boss' ? .12 : .25); }
+    else if (z.hitT > 0) { clip = 'hit'; at = ((z.type === 'boss' ? .6 : .42) - z.hitT) * 1.5; }
+    else if (z.roarT > 0) { clip = 'roar'; at = (z.enraged ? 1.7 : 2.1) - z.roarT; }
+    else if (z.attack) { clip = 'punch'; at = z.type === 'boss' ? (z.atkT = (z.atkT || 0) + dt) : z.phase * .25; }
+    else if (z.chargeT > 0) { clip = 'run'; at = z.phase / 6; }
     else { clip = z.spd > 1.85 ? 'run' : 'walk'; at = z.phase / (clip === 'run' ? 6 : 4.5); }
+    if (z.type === 'boss' && !z.attack) z.atkT = 0;
     const flash = z.char > 0 ? -z.char * .92 : z.flash > 0 ? (z.type === 'boss' ? (G.fps && G.fps.k > .5 ? .06 : .22) : .38) : frozen ? .3 : 0;
     z._clip = clip; z._at = at;
-    pushInst(z.model || ZOMB, z.x, (z.lift || 0) - sink, z.z, z.yaw, sc, clip, at, z.shirt, 0, flash, z.mask || 0, z.tilt || 0);
+    let zz = z.z, tilt = z.tilt || 0, yaw = z.yaw;
+    if (z.type === 'boss' && !z.dying) {
+      if (z.lunge > 0) zz += Math.sin(Math.PI * (1 - z.lunge)) * .14 * z.s; // the strike lunge
+      tilt += (z.lunge > 0 ? .1 * Math.sin(Math.PI * (1 - z.lunge)) : 0) - (z.recoil || 0) * .09; // leans into strikes, rocks back when hit
+      yaw = Math.atan2(-(G.sx - z.x), -Math.max(.5, G.sz - z.z)); z.yaw = yaw; // keeps its eyes on you
+    }
+    pushInst(z.model || ZOMB, z.x, (z.lift || 0) - sink, zz, yaw, sc, clip, at, z.shirt, 0, flash, z.mask || 0, tilt);
     if (!z.dying || z.dying < 1.3) pushBlob(z.x, z.z, sc * .55);
   }
   flushInst(ZOMB); for (const R of ZALL) flushInst(R);

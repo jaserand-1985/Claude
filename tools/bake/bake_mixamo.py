@@ -227,10 +227,23 @@ for c in clips:
     meta_clips[c['name']] = {'start': start, 'frames': n, 'dur': dur, 'loop': loop}; start += n
 F = len(frames_P); rows = (V + 2047) // 2048; W = ((V + rows - 1) // rows + 63) // 64 * 64  # no texture wider than 2048, little padding
 
-vat = np.zeros((F, rows * W, 4), np.float16); vat[:, :, 3] = 1
-nvat = np.zeros((F, rows * W, 4), np.uint8)
-for i in range(F):
-    vat[i, :V, :3] = frames_P[i]; nvat[i, :V, :3] = np.clip(frames_N[i] * 127.5 + 127.5, 0, 255).astype(np.uint8)
+PACK = os.environ.get('PACK') == '1'  # 8 bytes per vertex per frame instead of 12: position 11/11/10 bits in the clip's box + octahedral normal 16/16
+if PACK:
+    allP = np.concatenate(frames_P); pmin = allP.min(0) - 1e-4; pmax = allP.max(0) + 1e-4; psz = pmax - pmin
+    pk = np.zeros((F, rows * W, 2), np.uint32)
+    for i in range(F):
+        q = (frames_P[i] - pmin) / psz
+        qx = np.round(q[:, 0] * 2047).astype(np.uint32); qy = np.round(q[:, 1] * 2047).astype(np.uint32); qz = np.round(q[:, 2] * 1023).astype(np.uint32)
+        pk[i, :V, 0] = qx | (qy << 11) | (qz << 22)
+        n = frames_N[i] / (np.abs(frames_N[i]).sum(1, keepdims=True) + 1e-9); ox, oy = n[:, 0].copy(), n[:, 1].copy()
+        neg = n[:, 2] < 0; ox[neg] = (1 - np.abs(n[neg, 1])) * np.sign(n[neg, 0] + 1e-12); oy[neg] = (1 - np.abs(n[neg, 0])) * np.sign(n[neg, 1] + 1e-12)
+        ex = np.round((ox * .5 + .5) * 65535).astype(np.uint32); ey = np.round((oy * .5 + .5) * 65535).astype(np.uint32)
+        pk[i, :V, 1] = ex | (ey << 16)
+else:
+    vat = np.zeros((F, rows * W, 4), np.float16); vat[:, :, 3] = 1
+    nvat = np.zeros((F, rows * W, 4), np.uint8)
+    for i in range(F):
+        vat[i, :V, :3] = frames_P[i]; nvat[i, :V, :3] = np.clip(frames_N[i] * 127.5 + 127.5, 0, 255).astype(np.uint8)
 
 # ---- texture atlas
 import bpy_extras  # noqa: F401
@@ -283,12 +296,13 @@ json.dump(gibs, open(OUT + '-gibs.json', 'w'))
 
 # ---- pack: idx(u32) | col(u8*3) | tint(u8) | part(u8) | group(u8) | uv(f32*2) | vat(f16*4) | nvat(u8*4)
 blobs = [('idx', IDX.tobytes()), ('col', np.array(cols, np.uint8).ravel().tobytes()), ('tint', np.zeros(V, np.uint8).tobytes()),
-         ('part', np.array(parts, np.uint8).tobytes()), ('group', G.tobytes()), ('uv', UV.tobytes()), ('vat', vat.tobytes()), ('nvat', nvat.tobytes())]
+         ('part', np.array(parts, np.uint8).tobytes()), ('group', G.tobytes()), ('uv', UV.tobytes())] + ([('pk', pk.tobytes())] if PACK else [('vat', vat.tobytes()), ('nvat', nvat.tobytes())])
 buf, offs = b'', {}
 for k, b in blobs:
     buf += b'\0' * (-len(buf) % 8); offs[k] = len(buf); buf += b
 open(OUT + '.bin', 'wb').write(buf)
 meta = {'V': V, 'W': W, 'rows': rows, 'fps': FPS, 'frames': F, 'indexCount': int(len(IDX)), 'clips': meta_clips, 'gunBase': VB, 'offs': offs, 'tex': os.path.basename(OUT) + '.' + FMT, 'height': float(H)}
+if PACK: meta['pack'] = {'min': [float(x) for x in pmin], 'size': [float(x) for x in psz]}
 if NORMALS: meta['ntex'] = os.path.basename(OUT) + '-n.' + FMT
 json.dump(meta, open(OUT + '.json', 'w'))
 print('BAKED', os.path.basename(OUT), V, 'verts', len(IDX) // 3, 'tris', F, 'frames', round(len(buf) / 1e6, 2), 'MB', NT, 'texture tiles', list(meta_clips))
