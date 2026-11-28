@@ -14,6 +14,7 @@ const OUT = process.argv[2] || '/tmp/fps'; require('fs').mkdirSync(OUT, { recurs
   await page.waitForFunction(() => __dt.G.phase === 'boss', null, { timeout: 60000 });
   await page.waitForTimeout(500); await page.screenshot({ path: `${OUT}/touch-blend.png` });
   await page.waitForFunction(() => __dt.G.fps.k >= 1, null, { timeout: 20000 });
+  await page.evaluate(() => { const b = __dt.G.boss; b.hp = b.maxHp = 1e7; }); // keep it alive while we test the controls
   const cdp = await ctx.newCDPSession(page);
   const drag = async (x0, y0, x1, y1, steps = 12) => {
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: x0, y: y0 }] });
@@ -26,6 +27,17 @@ const OUT = process.argv[2] || '/tmp/fps'; require('fs').mkdirSync(OUT, { recurs
   await drag(300, 500, 120, 560); const a2 = await aim();
   console.log('drag left+down', JSON.stringify(a2), a2.yaw < a1.yaw ? 'OK' : 'FAIL');
   await page.screenshot({ path: `${OUT}/touch-aim.png` });
+  // up and down, again and again: every drag up must raise the view and every drag down lower it, with no pull-back afterwards
+  let ok = true;
+  for (const [dy, name] of [[-90, 'up'], [120, 'down'], [-140, 'up'], [-60, 'up'], [100, 'down'], [-100, 'up']]) {
+    const b = await aim(); await drag(200, 500, 205, 500 + dy, 8); const a = await aim(); await page.waitForTimeout(1500); const c = await aim();
+    const moved = dy < 0 ? a.pitch > b.pitch : a.pitch < b.pitch, held = Math.abs(c.pitch - a.pitch) < .01;
+    if (!moved || !held) ok = false;
+    console.log(`drag ${name}: pitch ${b.pitch} -> ${a.pitch}, 1.5 s later ${c.pitch}`, moved && held ? 'OK' : 'FAIL');
+    if (await page.evaluate(() => __dt.G.phase !== 'boss')) break;
+  }
+  console.log('up/down', ok ? 'OK' : 'FAIL');
+  await page.evaluate(() => { __dt.G.boss.hp = 50; });
   const r = await page.waitForFunction(() => __dt.state !== 'play' || __dt.G.phase === 'done', null, { timeout: 120000 }).then(() => page.evaluate(() => ({ state: __dt.state, phase: __dt.G.phase })));
   await page.waitForTimeout(400); await page.screenshot({ path: `${OUT}/touch-done.png` });
   await page.waitForFunction(() => __dt.state !== 'play', null, { timeout: 20000 });

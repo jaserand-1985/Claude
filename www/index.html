@@ -63,7 +63,7 @@ canvas{display:block;width:100%;height:100%}
   color:rgba(255,255,255,.8);text-shadow:0 2px 0 #000;transition:opacity .5s}
 .sheet{position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:center;pointer-events:none;
   padding-left:max(14px,env(safe-area-inset-left,0px));padding-right:max(14px,env(safe-area-inset-right,0px));padding-block:0 calc(env(safe-area-inset-bottom,0px) + 16px)}
-.panel{pointer-events:auto;width:100%;max-width:440px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:12px;
+.panel{pointer-events:auto;box-sizing:border-box;width:100%;max-width:440px;max-height:calc(100dvh - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px) - 28px);overflow-y:auto;overscroll-behavior:contain;touch-action:pan-y;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:12px;
   box-shadow:0 20px 60px rgba(0,0,0,.5);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
 .titlewrap{position:absolute;left:0;right:0;top:calc(env(safe-area-inset-top,0px) + 7vh);text-align:center;pointer-events:none}
 .title{font-family:var(--display);font-size:clamp(54px,17vw,92px);line-height:.88;margin:0;color:#fff;text-shadow:0 5px 0 var(--bad),0 10px 0 #000,0 0 40px rgba(0,0,0,.6);transform:rotate(-3deg)}
@@ -124,8 +124,7 @@ h2{font-family:var(--display);font-size:clamp(30px,9vw,40px);margin:0;color:var(
       <div class="ups" id="ups"></div>
       <div class="row2"><button class="btn ghost" id="wpnBtn">WEAPON: RIFLE</button><button class="btn ghost" id="mapBtn">MAP: AUTO</button></div>
       <div class="row2"><button class="btn ghost" id="soundBtn">SOUND: ON</button><button class="btn ghost" id="gfxBtn">GRAPHICS: HIGH</button></div>
-      <button class="btn ghost" id="goreBtn">BLOOD &amp; GORE: ON</button>
-      <button class="btn ghost" id="fpsBtn">BOSS VIEW: FIRST PERSON</button>
+      <div class="row2"><button class="btn ghost" id="goreBtn">GORE: ON</button><button class="btn ghost" id="fpsBtn">BOSS: 1ST PERSON</button></div>
       <button class="btn ghost" id="resetBtn">NEW GAME: START AT LEVEL 1</button>
     </div></div>
   </div>
@@ -134,8 +133,7 @@ h2{font-family:var(--display);font-size:clamp(30px,9vw,40px);margin:0;color:var(
     <h2>PAUSED</h2>
     <button class="btn" id="resumeBtn">RESUME</button>
     <div class="row2"><button class="btn ghost" id="soundBtn2">SOUND: ON</button><button class="btn ghost" id="gfxBtn2">GRAPHICS: HIGH</button></div>
-    <button class="btn ghost" id="goreBtn2">BLOOD &amp; GORE: ON</button>
-    <button class="btn ghost" id="fpsBtn2">BOSS VIEW: FIRST PERSON</button>
+    <div class="row2"><button class="btn ghost" id="goreBtn2">GORE: ON</button><button class="btn ghost" id="fpsBtn2">BOSS: 1ST PERSON</button></div>
     <button class="btn ghost" id="quitBtn">QUIT</button>
   </div></div></div>
 
@@ -1761,10 +1759,9 @@ const fpsGun = (() => { // a compact minigun held low on the right, in real-worl
   at(box(.03, .032, .042, glove), .004, -.055, .09);        // right hand on the grip
   const flash = new THREE.Mesh(new THREE.PlaneGeometry(.16, .16), new THREE.MeshBasicMaterial({ map: starTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, color: '#ffd9a0', fog: false }));
   flash.position.z = -.37; g.add(flash);
-  const light = new THREE.PointLight('#ffb35a', 0, 6, 1.6); light.position.set(0, .03, -.45); g.add(light);
   g.traverse(o => { if (o.isMesh) { o.frustumCulled = false; o.renderOrder = 5; } });
   g.visible = false; camera.add(g);
-  return { g, spin, flash, light };
+  return { g, spin, flash, metal };
 })();
 // tracers from the muzzle to wherever each round lands
 const FPS_TR = 24, fpsTr = [];
@@ -1774,8 +1771,8 @@ const fpsActive = () => !!(G && G.fps && G.fps.on);
 const fpsAiming = () => !!(G && state === 'play' && G.fps && G.fps.on && G.fps.k > .3);
 function fpsLook(dx, dy) {
   const F = G.fps, s = 1.5 / Math.max(320, canvas.clientWidth);
-  F.yaw = clamp(F.yaw + dx * s, -.95, .95); F.pitch = clamp(F.pitch - dy * s, -.2, .95);
-  F.touched = true;
+  F.yaw = clamp(F.yaw + dx * s, -.95, .95); F.pitch = clamp(F.pitch - dy * s, -.35, 1.25); // drag up to look up, like other phone shooters
+  F.touched = true; F.lastTouch = G.t;
 }
 function fpsEye(out) { // the squad leader's eyes
   const h = G.soldiers.find(s => s.hero) || G.soldiers[0];
@@ -1816,14 +1813,12 @@ function fpsUpdate(dt) {
   const firing = F.on && F.k > .8 && b && !b.dying && G.phase === 'boss';
   F.spinV += ((firing ? 1 : 0) - F.spinV) * Math.min(1, dt * 5); F.spin += F.spinV * dt * 38;
   if (!firing) return;
-  // gentle aim assist when the crosshair is already close to the body and you're not dragging
+  // light sideways follow: when you haven't touched the screen for a second and the crosshair is already on the boss,
+  // it keeps up as the boss sways across the road. It never moves the view up or down, so it can't fight your drag.
   fpsEye(_fe);
-  if (!drag.on) {
+  if (!drag.on && G.t - (F.lastTouch || -9) > 1) {
     const S = fpsBossShape(b), want = Math.atan2(S.cx - _fe.x, Math.max(1, _fe.z - S.cz)), dy = want - F.yaw;
-    if (Math.abs(dy) < .14) F.yaw += dy * Math.min(1, dt * 2.5);
-    const pTop = Math.atan2(S.hy + S.hr - _fe.y, Math.max(1, _fe.z - b.z)), pLow = Math.atan2(.1 * S.H - _fe.y, Math.max(1, _fe.z - b.z));
-    if (F.pitch > pTop + .05 && F.pitch < pTop + .25) F.pitch += (pTop - F.pitch) * Math.min(1, dt * 2);
-    if (F.pitch < pLow) F.pitch += (pLow - F.pitch) * Math.min(1, dt * 2);
+    if (Math.abs(dy) < .1) F.yaw += dy * Math.min(1, dt * 1.5);
   }
   F.cd -= dt * (G.pw.rapid > 0 ? 2.4 : 1);
   let shots = 0;
@@ -1875,7 +1870,7 @@ function fpsView(dt, e) {
     fpsGun.spin.rotation.z = F.spin;
     const fl = k > .55 && F.spinV > .5; fpsGun.flash.visible = fl;
     if (fl) { fpsGun.flash.rotation.z = Math.random() * TAU; fpsGun.flash.scale.setScalar(rand(.7, 1.15)); }
-    fpsGun.light.intensity = fl ? 2.5 : 0;
+    if (fl) fpsGun.metal.emissive.setRGB(.5, .3, .1); else fpsGun.metal.emissive.set('#1a1c20'); // muzzle glow on the barrels (no extra light: adding one recompiles every shader)
     const x = $('xhair'); x.classList.toggle('hit', F.hitT > 0 && !F.head); x.classList.toggle('head', F.hitT > 0 && F.head);
   }
   // tracers
@@ -1890,6 +1885,12 @@ function fpsView(dt, e) {
   }
   for (let j = fpsTr.length - 1; j >= 0; j--) if (fpsTr[j].life <= 0) fpsTr.splice(j, 1);
   fpsTrMesh.count = i; fpsTrMesh.instanceMatrix.needsUpdate = true;
+}
+// draw the gun and a tracer once while the menu loads, so their shaders are ready before the first boss (otherwise the switch stutters)
+function fpsPrewarm() {
+  fpsGun.g.visible = true; fpsGun.g.position.set(0, 0, -.5); fpsTrMesh.count = 1; fpsTrMesh.setMatrixAt(0, _m.makeTranslation(camera.position.x, camera.position.y, camera.position.z - 3));
+  try { if (hiQ && composer) composer.render(); else renderer.render(scene, camera); } catch (e) {}
+  fpsGun.g.visible = false; fpsTrMesh.count = 0;
 }
 function fpsReset() { fpsGun.g.visible = false; fpsTr.length = 0; fpsTrMesh.count = 0; $('xhair').classList.remove('on'); $('fpsHint').classList.remove('on'); }
 
@@ -2364,8 +2365,8 @@ function refreshLoadout() {
 }
 function refreshSound() { const t = 'SOUND: ' + (soundOn ? 'ON' : 'OFF'); $('soundBtn').textContent = t; $('soundBtn2').textContent = t;
   const g = 'GRAPHICS: ' + (hiQ ? 'HIGH' : 'LOW'); $('gfxBtn').textContent = g; $('gfxBtn2').textContent = g;
-  const b = 'BLOOD & GORE: ' + (goreOn ? 'ON' : 'OFF'); $('goreBtn').textContent = b; $('goreBtn2').textContent = b;
-  const f = 'BOSS VIEW: ' + (fpsOn ? 'FIRST PERSON' : 'CLASSIC'); $('fpsBtn').textContent = f; $('fpsBtn2').textContent = f; }
+  const b = 'GORE: ' + (goreOn ? 'ON' : 'OFF'); $('goreBtn').textContent = b; $('goreBtn2').textContent = b;
+  const f = 'BOSS: ' + (fpsOn ? '1ST PERSON' : 'CLASSIC'); $('fpsBtn').textContent = f; $('fpsBtn2').textContent = f; }
 function setQuality(high) { // LOW: no bloom/post, no character shadows, smaller shadow map, lower resolution
   hiQ = high; store.set('gfx', high ? 'high' : 'low');
   if (SOLD) SOLD.mesh.castShadow = high; if (HEROM) HEROM.mesh.castShadow = high; if (ZOMB) ZOMB.mesh.castShadow = high; for (const R of ZALL) R.mesh.castShadow = high; for (const m of gibMeshes) if (m) m.mesh.castShadow = high;
@@ -2470,9 +2471,9 @@ async function loadZombieModels() {
   try { return await (await fetch(`models/${list.gibs || names[0]}-gibs.json`)).json(); } catch (e) { return null; }
 }
 Promise.all([document.fonts ? document.fonts.load('40px Bungee').catch(() => {}) : 0, loadTroops(), loadVAT('zombie', MAXZ, { gore: true }), fetch('models/zombie-gibs.json').then(r => r.json()), loadZombieModels()]).then(([, s, z, gibData, texGibs]) => {
-  SOLD = s; ZOMB = z; buildGibs(texGibs || gibData); $('playBtn').disabled = false; goMenu(); requestAnimationFrame(frame);
+  SOLD = s; ZOMB = z; buildGibs(texGibs || gibData); $('playBtn').disabled = false; goMenu(); fpsPrewarm(); requestAnimationFrame(frame);
 }).catch(err => { $('playBtn').textContent = 'COULD NOT LOAD MODELS'; console.error(err); });
-window.__dt = { info: (hide) => { const g = []; if (hide) scene.traverse(o => { if (o.isInstancedMesh && o !== SOLD.mesh && !(HEROM && o === HEROM.mesh) && o !== ZOMB.mesh && !ZALL.some(R => R.mesh === o) && o.visible) { o.visible = false; g.push(o); } }); renderer.render(scene, camera); const r = { tris: renderer.info.render.triangles, calls: renderer.info.render.calls }; g.forEach(o => o.visible = true); return r; }, mk: (x, z, t = 'walker') => makeZombie(x, z, t), audio: () => ({ ctx: AC && AC.state, loaded: Object.keys(buffers).length, voices }), camera, THREE, get G() { return G; }, get state() { return state; }, start: startLevel, power: t => applyPower(t), setTheme, step(dt) { if (state === 'play') update(dt); }, tick(dt, draw) { if (state === 'play') update(dt); sync(state === 'paused' ? 0 : dt); updateHud(); updateFloats(state === 'paused' ? 0 : dt); if (draw) (hiQ && composer ? composer.render() : renderer.render(scene, camera)); }, get gore() { return goreOn; }, sync, render: () => (hiQ && composer ? composer.render() : renderer.render(scene, camera)), save, persist, headAt: z => partWorld(z, 1, new THREE.Vector3()), torsoAt: z => partWorld(z, 0, new THREE.Vector3()) };
+window.__dt = { info: (hide) => { const g = []; if (hide) scene.traverse(o => { if (o.isInstancedMesh && o !== SOLD.mesh && !(HEROM && o === HEROM.mesh) && o !== ZOMB.mesh && !ZALL.some(R => R.mesh === o) && o.visible) { o.visible = false; g.push(o); } }); renderer.render(scene, camera); const r = { tris: renderer.info.render.triangles, calls: renderer.info.render.calls }; g.forEach(o => o.visible = true); return r; }, mk: (x, z, t = 'walker') => makeZombie(x, z, t), audio: () => ({ ctx: AC && AC.state, loaded: Object.keys(buffers).length, voices }), camera, THREE, get G() { return G; }, get state() { return state; }, start: startLevel, power: t => applyPower(t), setTheme, step(dt) { if (state === 'play') update(dt); }, tick(dt, draw) { if (state === 'play') update(dt); sync(state === 'paused' ? 0 : dt); updateHud(); updateFloats(state === 'paused' ? 0 : dt); if (draw) (hiQ && composer ? composer.render() : renderer.render(scene, camera)); }, get gore() { return goreOn; }, sync, render: () => (hiQ && composer ? composer.render() : renderer.render(scene, camera)), save, persist, programs: () => renderer.info.programs.length, headAt: z => partWorld(z, 1, new THREE.Vector3()), torsoAt: z => partWorld(z, 0, new THREE.Vector3()) };
 </script>
 </body>
 </html>
