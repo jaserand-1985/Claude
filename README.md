@@ -32,10 +32,10 @@ The **MAP** button in the Armory picks a map, or AUTO to change map every level.
 | --- | --- | --- |
 | Rifle | start | Fast, accurate tracers |
 | Shotgun | level 2 | Five-pellet blasts, deadly up close |
-| Rocket launcher | level 3 | Real rockets with smoke trails; the blast blows zombies apart |
+| Rocket launcher | rocket boxes only | Real rockets with smoke trails; the blast blows zombies apart. 20 seconds per box |
 | Flamethrower | level 4 | A long jet of fire that reaches about 12 m ahead, splashes burning fuel on the road and sets zombies burning until they char |
 
-The **WEAPON** button in the Armory sets the starting weapon. Weapon crates on the road switch the whole squad's weapon for the rest of the level. Every level has a heavy weapon crate early on: rockets on level 1, flamethrowers on level 2, then a rocket, flamer or shotgun crate. The squad leader always carries the minigun.
+The **WEAPON** button in the Armory sets the starting weapon. Shotgun and flamer crates switch the whole squad's weapon for the rest of the level. **Rockets are the biggest power-up and run on a timer:** a rocket box gives the squad rocket launchers for 20 seconds, then it goes back to its gun. A rocket box comes early in every level (flamers instead on level 2), then one every few stretches, and from level 4 a rocket supply drop lands before the boss. The squad leader always carries the minigun.
 
 ### Power-ups
 
