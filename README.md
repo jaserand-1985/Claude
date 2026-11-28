@@ -9,6 +9,7 @@ A 3D zombie lane shooter for Android phones. Your squad charges down a road thro
 - **Gates:** each gate has two halves. Blue halves add or multiply soldiers (`+8`, `×2`); red halves remove or divide them (`−6`, `÷2`). You pass through whichever half you are lined up with. Shooting an add/subtract half raises its number, so a red gate can be turned blue.
 - **Zombies:** every zombie that reaches your squad takes a soldier with it. Brutes (big and purple) take three. If your whole squad falls, the run is over.
 - **Boss:** at the end of every level your squad stops and the boss walks in. Its stomps knock out soldiers, so kill it fast.
+- **First-person boss fight:** as the boss walks in, the camera drops into your squad leader's eyes and you hold the minigun. Drag anywhere to aim (on a computer, drag with the mouse or use WASD / arrow keys); the minigun fires by itself at the crosshair. The head is the weak spot: headshots do 2.5× damage, and the crosshair turns red when you land one. The rest of the squad keeps shooting the boss on its own, so good aim shortens the fight and the boss gets fewer stomps in. A light aim assist pulls the crosshair onto the boss when it is already close. When the boss falls the camera pulls back out. **BOSS VIEW** in the menu and pause screen switches between FIRST PERSON (default) and the CLASSIC overhead view.
 - **Armory:** coins from kills, survivors and bosses buy permanent upgrades between levels.
 
 ### Maps
@@ -139,6 +140,8 @@ Headless playthroughs that catch errors and broken game state (Playwright with C
 node tools/playtest/playtest.js 1 12 /tmp/playtest   # plays levels 1-12 with an autopilot
 node tools/playtest/scenarios.js /tmp/playtest       # each weapon, every power-up, gore off, LOW graphics, losing, pause and quit, all five maps, level 25
 node tools/playtest/shot.js 4 /tmp/horde.png 13 nofire   # screenshot of a horde 13 m out
+node tools/playtest/fps.js /tmp/fps 1,2,3,4,5,6           # first-person boss fight for each boss: screenshots, aimed fight, camera back out
+node tools/playtest/fps-touch.js /tmp/fps                 # real-time touch drags at phone size: aiming, fight end, win screen
 ```
 
 ## Build the APK yourself

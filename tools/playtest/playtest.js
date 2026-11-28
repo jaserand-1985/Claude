@@ -13,7 +13,7 @@ const fs = require('fs'); fs.mkdirSync(OUT, { recursive: true });
   page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') errors.push(m.type() + ': ' + m.text()); });
   await page.goto('http://localhost:' + (process.env.PORT || 8790) + '/index.html' + (process.env.DT ? '?dt=' + process.env.DT : ''));
   await page.waitForFunction(() => window.__dt && !document.getElementById('playBtn').disabled, null, { timeout: 120000 });
-  await page.evaluate(() => { window.__freeze = true; localStorage.setItem('gfxChosen', 'true'); });
+  await page.evaluate((noaim) => { window.__freeze = true; window.__noaim = noaim; localStorage.setItem('gfxChosen', 'true'); }, !!process.env.NOAIM);
   const report = [];
   for (const L of (process.env.LEVELS ? process.env.LEVELS.split(',').map(Number) : Array.from({ length: L1 - L0 + 1 }, (_, i) => +L0 + i))) {
     const nErr = errors.length;
@@ -30,6 +30,11 @@ const fs = require('fs'); fs.mkdirSync(OUT, { recursive: true });
         const val = s => s.kind === 'mul' ? g.soldiers.length * (s.v - 1) : s.kind === 'div' ? -g.soldiers.length / 2 : s.v;
         if (gate) { if (gate !== g._pg) { g._pg = gate; const a = val(gate.panels[0].spec), b = val(gate.panels[1].spec); g._side = ((a > b) === (Math.random() < skill)) ? -2.2 : 2.2; } g.tx = g._side; }
         else if (wobble) g.tx = Math.sin(steps / 25) * 3.2; else if (process_env_CASUAL) g.tx = 0; else { const c = g.crates.find(c => !c.dead && g.sz - c.z > 0 && g.sz - c.z < 20); g.tx = c ? c.x : 0; }
+        if (g.fps && g.fps.on && g.boss && !g.boss.dying && !window.__noaim) { // first-person boss: a so-so player aims at the body, sometimes the head, never perfectly
+          const b = g.boss, p = (steps % 90 < 30 ? D.headAt(b) : D.torsoAt(b)) || { x: b.x, y: 3, z: b.z }, e = { x: g.sx, y: 1.55, z: g.sz - g.R - .45 }, dz = Math.max(1, e.z - p.z);
+          g._wob = (g._wob || 0) + dt; const F = g.fps, k = .12;
+          F.yaw += (Math.atan2(p.x - e.x, dz) + Math.sin(g._wob * 2.3) * .07 - F.yaw) * k; F.pitch += (Math.atan2(p.y - e.y, Math.hypot(dz, p.x - e.x)) + Math.sin(g._wob * 1.7) * .06 - F.pitch) * k;
+        }
         try { D.step(dt); } catch (e) { out.bad.push('update threw: ' + e.message + ' @' + (e.stack || '').split('\n')[1]); break; }
         steps++;
         if (steps % 15 === 0) {
