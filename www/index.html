@@ -504,7 +504,15 @@ const flat = std2;
 const RIM_AMT = { value: 1 }; // the cool rim light on characters; turned down in first person, where it washed the bosses out
 async function loadVAT(name, max, opts = {}) {
   const meta = await (await fetch(`models/${name}.json`)).json();
-  const buf = await (await fetch(`models/${name}.bin`)).arrayBuffer();
+  // big boss bins ship in pieces (name.bin, name.1.bin, …) so no single file tops 14 MB
+  const bufs = await Promise.all(Array.from({ length: meta.chunks || 1 }, (_, i) =>
+    fetch(`models/${name}${i ? '.' + i : ''}.bin`).then(r => r.arrayBuffer())));
+  let buf = bufs[0];
+  if (bufs.length > 1) {
+    const all = new Uint8Array(bufs.reduce((n, b) => n + b.byteLength, 0));
+    let at = 0; for (const b of bufs) { all.set(new Uint8Array(b), at); at += b.byteLength; }
+    buf = all.buffer;
+  }
   const o = meta.offs, V = meta.V;
   const vat = new Uint16Array(buf, o.vat, meta.W * meta.rows * meta.frames * 4);
   const g = new THREE.BufferGeometry();

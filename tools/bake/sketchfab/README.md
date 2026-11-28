@@ -24,3 +24,5 @@ The Mutagen (a Source-engine ValveBiped skeleton, lying down in its bind pose, w
 `RENAME=valve DROP=hair python rig_rigged.py -- william_birkin_stage.glb mutagen.blend 26000 -90` and baked with
 `TEX=1024` (its nine materials go into a 3x3 atlas, 3072 px square).
 Bosses are baked with `TEX=2048 NTEX=1024` and 13k-26k triangles; the big zombies with the defaults (1k, 5k triangles).
+
+After baking a boss over 14 MB, run `python3 tools/bake/split_bin.py www/models/<name>` so the bin ships in pieces (the game joins them).
