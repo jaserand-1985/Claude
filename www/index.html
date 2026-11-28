@@ -1739,29 +1739,96 @@ const FPS_RATE = 14, FPS_HEAD = 2.5;
 const _fl = new THREE.Vector3(), _fe = new THREE.Vector3(), _fd = new THREE.Vector3(), _fm = new THREE.Vector3(), _fh = new THREE.Vector3();
 scene.add(camera); // the weapon rides on the camera
 const fpsGun = (() => { // a compact minigun held low on the right, in real-world size (metres from the eye)
-  const g = new THREE.Group(), std = (color, metalness, roughness, emissive) => new THREE.MeshStandardMaterial({ color, metalness, roughness, emissive }),
-    metal = std('#3a3e44', .8, .35, '#1a1c20'), dark = std('#18191b', .6, .5, '#0b0b0c'), olive = std('#4f5835', .1, .8, '#191c0e'),
-    brass = std('#c39a45', .9, .3, '#33240b'), glove = std('#2b2723', 0, .9, '#100e0c'), sleeve = std('#46503a', 0, .95, '#151a10');
-  const cyl = (r, l, m, seg = 10) => new THREE.Mesh(new THREE.CylinderGeometry(r, r, l, seg).rotateX(Math.PI / 2), m);
-  const box = (w, h, d, m) => new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
-  const at = (o, x, y, z) => { o.position.set(x, y, z); g.add(o); return o; };
-  const spin = new THREE.Group(); g.add(spin); // the barrel cluster, spun up while firing
-  for (let i = 0; i < 6; i++) { const a = i / 6 * TAU, b = cyl(.0055, .3, metal, 6); b.position.set(Math.cos(a) * .015, Math.sin(a) * .015, -.2); spin.add(b); }
-  for (const z of [-.09, -.24, -.345]) { const c = cyl(.024, .012, dark, 12); c.position.z = z; spin.add(c); }
-  const hub = cyl(.009, .3, dark, 6); hub.position.z = -.2; spin.add(hub);
-  at(cyl(.03, .1, metal, 14), 0, 0, 0);                    // receiver
-  at(box(.04, .045, .07, dark), 0, -.02, .07);              // motor housing
-  at(box(.008, .008, .09, dark), 0, .045, -.005);           // carry handle
-  at(box(.008, .02, .008, dark), 0, .035, -.045); at(box(.008, .02, .008, dark), 0, .035, .035);
-  at(box(.012, .008, .05, olive), .03, -.018, .03);         // ammo belt feed
-  for (let i = 0; i < 4; i++) { const r = cyl(.0032, .014, brass, 6); r.rotation.set(0, 0, Math.PI / 2); at(r, .03, -.012, .05 - i * .009); }
-  const grip = at(box(.018, .05, .022, dark), .0, -.048, .085); grip.rotation.x = -.35;
-  at(box(.03, .032, .042, glove), .004, -.055, .09);        // right hand on the grip
+  // Lit with matcaps (painted light-and-reflection spheres) so it reads as real metal on every map, even the darkest,
+  // without adding a light; painted detail maps give it scratches, wear, knurling, stencils and cloth.
+  const matcap = (base, hi, sky, ground, rim, spec) => canvasTex(256, 256, (g, w, h) => {
+    const c = w / 2, r = w / 2;
+    let gr = g.createLinearGradient(0, 0, 0, h); gr.addColorStop(0, sky); gr.addColorStop(.48, base); gr.addColorStop(.56, ground); gr.addColorStop(1, base);
+    g.fillStyle = gr; g.fillRect(0, 0, w, h);
+    gr = g.createRadialGradient(c, c, r * .55, c, c, r); gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, 'rgba(0,0,0,.55)'); g.fillStyle = gr; g.fillRect(0, 0, w, h); // falloff
+    gr = g.createRadialGradient(c * 1.35, c * 1.45, r * .7, c, c, r); gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(.85, rim); gr.addColorStop(1, 'rgba(0,0,0,0)'); g.fillStyle = gr; g.fillRect(0, 0, w, h); // cool rim, lower right
+    gr = g.createRadialGradient(c * .68, c * .6, 0, c * .68, c * .6, r * spec); gr.addColorStop(0, hi); gr.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = gr; g.fillRect(0, 0, w, h); // key highlight
+    gr = g.createRadialGradient(c * 1.3, c * .5, 0, c * 1.3, c * .5, r * spec * .5); gr.addColorStop(0, 'rgba(255,235,210,.35)'); gr.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = gr; g.fillRect(0, 0, w, h); // warm fill
+  });
+  const detail = (w, h, draw) => { const t = canvasTex(w, h, draw); t.wrapS = t.wrapT = THREE.RepeatWrapping; return t; };
+  const scratches = (g, w, h, n, col) => { g.strokeStyle = col; for (let i = 0; i < n; i++) { const x = Math.random() * w, y = Math.random() * h, a = rand(-.4, .4), l = rand(4, 26); g.lineWidth = rand(.5, 1.2); g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); g.stroke(); } };
+  const metalMap = detail(512, 256, (g, w, h) => {
+    g.fillStyle = '#d6dae0'; g.fillRect(0, 0, w, h);
+    for (let y = 0; y < h; y++) { g.fillStyle = `rgba(${Math.random() < .5 ? '255,255,255' : '0,0,0'},${rand(.02, .09)})`; g.fillRect(0, y, w, 1); } // brushed grain
+    speckle(g, w, h, 2500, .12);
+    for (let i = 0; i < 26; i++) { const x = Math.random() * w, y = Math.random() * h, gr = g.createRadialGradient(x, y, 0, x, y, rand(8, 30)); gr.addColorStop(0, 'rgba(40,30,22,.35)'); gr.addColorStop(1, 'rgba(40,30,22,0)'); g.fillStyle = gr; g.fillRect(x - 30, y - 30, 60, 60); } // grime
+    scratches(g, w, h, 160, 'rgba(255,255,255,.5)'); scratches(g, w, h, 60, 'rgba(0,0,0,.35)');
+    g.fillStyle = 'rgba(255,255,255,.75)'; for (let i = 0; i < w; i += 64) { g.beginPath(); g.arc(i + 10, 12, 3, 0, TAU); g.fill(); g.beginPath(); g.arc(i + 10, h - 12, 3, 0, TAU); g.fill(); } // rivets
+    g.fillStyle = 'rgba(0,0,0,.45)'; g.fillRect(0, 22, w, 2); g.fillRect(0, h - 24, w, 2); // panel seams
+    g.save(); g.translate(w, 0); g.scale(-1, 1); g.font = 'bold 22px monospace'; g.fillStyle = 'rgba(245,240,225,.8)'; g.fillText('M134D  7.62 NATO', 150, 140); g.font = 'bold 13px monospace'; g.fillText('SER 0042-DT', 190, 162); g.restore(); // mirrored: the cylinder's texture wraps the other way
+  });
+  const barrelMap = detail(256, 64, (g, w, h) => {
+    const gr = g.createLinearGradient(0, 0, w, 0); gr.addColorStop(0, '#8d8f95'); gr.addColorStop(.7, '#9a9aa0'); gr.addColorStop(.86, '#a08d6a'); gr.addColorStop(.95, '#6f5e86'); gr.addColorStop(1, '#3a3236'); // heat-blued muzzle end
+    g.fillStyle = gr; g.fillRect(0, 0, w, h); for (let x = 0; x < w; x++) { g.fillStyle = `rgba(0,0,0,${rand(0, .08)})`; g.fillRect(x, 0, 1, h); }
+    speckle(g, w, h, 500, .15); g.fillStyle = 'rgba(0,0,0,.5)'; for (const x of [40, 46, 150, 156]) g.fillRect(x, 0, 2, h);
+  });
+  const gripMap = detail(128, 128, (g, w, h) => {
+    g.fillStyle = '#5a5c60'; g.fillRect(0, 0, w, h); g.strokeStyle = 'rgba(0,0,0,.55)'; g.lineWidth = 1.5;
+    for (let i = -h; i < w + h; i += 6) { g.beginPath(); g.moveTo(i, 0); g.lineTo(i + h, h); g.stroke(); g.beginPath(); g.moveTo(i, h); g.lineTo(i + h, 0); g.stroke(); } // knurling
+    speckle(g, w, h, 300, .2);
+  });
+  const clothMap = detail(256, 128, (g, w, h) => {
+    g.fillStyle = '#8d9466'; g.fillRect(0, 0, w, h);
+    for (let y = 0; y < h; y += 2) { g.fillStyle = `rgba(0,0,0,${rand(.05, .15)})`; g.fillRect(0, y, w, 1); } for (let x = 0; x < w; x += 2) { g.fillStyle = `rgba(255,255,255,${rand(.02, .07)})`; g.fillRect(x, 0, 1, h); }
+    speckle(g, w, h, 900, .15); g.font = 'bold 18px monospace'; g.fillStyle = 'rgba(240,235,200,.6)'; g.fillText('CTG 7.62MM', 70, 60); g.fillText('LINKED 1500', 64, 84);
+  });
+  const gloveMap = detail(128, 128, (g, w, h) => {
+    g.fillStyle = '#6b625a'; g.fillRect(0, 0, w, h); speckle(g, w, h, 900, .25);
+    g.fillStyle = 'rgba(0,0,0,.4)'; for (let i = 0; i < 4; i++) g.fillRect(8 + i * 30, 10, 22, 30); // knuckle pads
+    g.strokeStyle = 'rgba(0,0,0,.5)'; g.setLineDash([3, 3]); g.strokeRect(4, 4, w - 8, h - 8);
+  });
+  const MC = {
+    steel: matcap('#5e646e', 'rgba(255,255,255,.95)', '#c3cddb', '#2c2620', 'rgba(140,180,230,.6)', .42),
+    dark: matcap('#373a41', 'rgba(255,255,255,.7)', '#8c96a5', '#1c1916', 'rgba(120,150,200,.5)', .36),
+    rubber: matcap('#2e3035', 'rgba(255,255,255,.22)', '#62676f', '#1a1918', 'rgba(120,140,180,.3)', .55),
+    cloth: matcap('#5f684a', 'rgba(255,255,230,.2)', '#a1aa82', '#2f3324', 'rgba(160,180,210,.3)', .65),
+    brass: matcap('#9c7432', 'rgba(255,248,220,1)', '#f2d690', '#4a320f', 'rgba(255,225,160,.45)', .4),
+  };
+  const mat = (mc, map, rep = [1, 1], color = '#ffffff') => { if (map && rep) map.repeat.set(...rep); const m = new THREE.MeshMatcapMaterial({ matcap: mc, map, color, fog: false }); m.color.multiplyScalar(1.5); return m; }; // a touch over 1 so it holds up under the darker maps' grading
+  const metal = mat(MC.steel, metalMap), dark = mat(MC.dark, metalMap), barrelM = mat(MC.steel, barrelMap), grip = mat(MC.rubber, gripMap),
+    cloth = mat(MC.cloth, clothMap), brass = mat(MC.brass, null), glove = mat(MC.rubber, gloveMap, null, '#d8cfc4');
+  // static parts are merged per material so the gun costs a handful of draw calls
+  const parts = new Map(), add = (geo, m, x, y, z, rx = 0, ry = 0, rz = 0) => { geo.rotateX(rx).rotateY(ry).rotateZ(rz).translate(x, y, z); if (!parts.has(m)) parts.set(m, []); parts.get(m).push(geo.index ? geo.toNonIndexed() : geo); };
+  const C = (r, l, seg = 12, r2 = r) => new THREE.CylinderGeometry(r, r2, l, seg).rotateX(Math.PI / 2), B = (w, h, d) => new THREE.BoxGeometry(w, h, d);
+  const merge = list => { let n = 0; for (const q of list) n += q.attributes.position.count; const P = new Float32Array(n * 3), N = new Float32Array(n * 3), U = new Float32Array(n * 2); let o = 0;
+    for (const q of list) { P.set(q.attributes.position.array, o * 3); N.set(q.attributes.normal.array, o * 3); U.set(q.attributes.uv.array, o * 2); o += q.attributes.position.count; }
+    const out = new THREE.BufferGeometry(); out.setAttribute('position', new THREE.BufferAttribute(P, 3)); out.setAttribute('normal', new THREE.BufferAttribute(N, 3)); out.setAttribute('uv', new THREE.BufferAttribute(U, 2)); return out; };
+  const g = new THREE.Group(), spin = new THREE.Group(); g.add(spin); // the barrel cluster, spun up while firing
+  const sp = [];
+  for (let i = 0; i < 6; i++) { const a = i / 6 * TAU, b = C(.0055, .3, 8); b.translate(Math.cos(a) * .015, Math.sin(a) * .015, -.2); sp.push([b, barrelM]);
+    const bore = C(.0032, .004, 8); bore.translate(Math.cos(a) * .015, Math.sin(a) * .015, -.351); sp.push([bore, grip]); }
+  for (const z of [-.09, -.24]) { const c = C(.025, .012, 16); c.translate(0, 0, z); sp.push([c, dark]); }
+  { const c = C(.027, .022, 16, .025); c.translate(0, 0, -.338); sp.push([c, dark]); } // muzzle clamp
+  { const c = C(.009, .3, 8); c.translate(0, 0, -.2); sp.push([c, dark]); }
+  const byM = new Map(); for (const [q, m] of sp) { if (!byM.has(m)) byM.set(m, []); byM.get(m).push(q.index ? q.toNonIndexed() : q); }
+  for (const [m, list] of byM) spin.add(new THREE.Mesh(merge(list), m));
+  add(C(.031, .1, 32), metal, 0, 0, 0);                                  // receiver
+  for (const z of [-.04, -.012, .016]) add(C(.0335, .006, 32), dark, 0, 0, z); // cooling ribs
+  add(C(.026, .012, 16), dark, 0, 0, .056);                              // rear cap
+  add(B(.042, .046, .072), metal, 0, -.022, .072);                       // motor housing
+  for (let i = 0; i < 5; i++) add(B(.044, .004, .05), dark, 0, -.008 - i * .008, .072); // motor vents
+  add(B(.012, .006, .1), dark, 0, .034, -.005);                          // top rail
+  for (let i = 0; i < 9; i++) add(B(.014, .003, .005), metal, 0, .0385, -.05 + i * .011); // rail teeth
+  add(B(.007, .007, .085), grip, 0, .056, -.005);                        // carry handle bar
+  add(B(.007, .02, .007), dark, 0, .046, -.045); add(B(.007, .02, .007), dark, 0, .046, .035);
+  add(B(.018, .052, .024), grip, 0, -.05, .088, -.35);                   // pistol grip
+  add(B(.004, .022, .03), dark, 0, -.04, .06, -.2);                      // trigger guard
+  add(B(.014, .01, .055), cloth, -.032, -.018, .028);                    // feed chute, on the side you can see
+  for (let i = 0; i < 8; i++) { const x = -.03 - (i > 4 ? (i - 4) * .004 : 0), y = -.011 - (i > 4 ? (i - 4) * .007 : 0), z = .056 - i * .008;
+    add(C(.0034, .016, 8), brass, x, y, z, 0, Math.PI / 2); add(C(.0018, .006, 6, .0008), brass, x - .011, y, z, 0, -Math.PI / 2); add(B(.004, .003, .006), dark, x + .004, y + .003, z - .004); } // cases, tips, links // linked rounds feeding in
+  add(B(.032, .034, .044), glove, .004, -.056, .092);                    // right hand on the grip
+  for (let i = 0; i < 3; i++) add(B(.008, .012, .01), glove, -.012, -.044 - i * .011, .072); // fingers round the grip
+  for (const [m, list] of parts) g.add(new THREE.Mesh(merge(list), m));
   const flash = new THREE.Mesh(new THREE.PlaneGeometry(.16, .16), new THREE.MeshBasicMaterial({ map: starTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, color: '#ffd9a0', fog: false }));
   flash.position.z = -.37; g.add(flash);
   g.traverse(o => { if (o.isMesh) { o.frustumCulled = false; o.renderOrder = 5; } });
   g.visible = false; camera.add(g);
-  return { g, spin, flash, metal };
+  return { g, spin, flash, metal: barrelM };
 })();
 // tracers from the muzzle to wherever each round lands
 const FPS_TR = 24, fpsTr = [];
@@ -1865,12 +1932,12 @@ function fpsView(dt, e) {
   $('fpsHint').classList.toggle('on', on && F.hintT > 0 && G.phase === 'boss');
   if (on) {
     const up = (e - .6) / .4, k = F.kick;
-    fpsGun.g.position.set(.085 + rand(-1, 1) * .0015 * k, -.095 - (1 - up) * .2 + Math.sin(G.t * 2.2) * .002, -.3 + k * .01);
-    fpsGun.g.rotation.set(.05 + k * .015, .11, 0); // angled in toward the crosshair
+    fpsGun.g.position.set(.075 + rand(-1, 1) * .0015 * k, -.088 - (1 - up) * .2 + Math.sin(G.t * 2.2) * .002, -.3 + k * .01);
+    fpsGun.g.rotation.set(.05 + k * .015, .13, 0); // angled in toward the crosshair
     fpsGun.spin.rotation.z = F.spin;
     const fl = k > .55 && F.spinV > .5; fpsGun.flash.visible = fl;
     if (fl) { fpsGun.flash.rotation.z = Math.random() * TAU; fpsGun.flash.scale.setScalar(rand(.7, 1.15)); }
-    if (fl) fpsGun.metal.emissive.setRGB(.5, .3, .1); else fpsGun.metal.emissive.set('#1a1c20'); // muzzle glow on the barrels (no extra light: adding one recompiles every shader)
+    if (fl) fpsGun.metal.color.setRGB(2.6, 1.9, 1.3); else fpsGun.metal.color.setRGB(1.5, 1.5, 1.5); // muzzle glow on the barrels (no extra light: adding one recompiles every shader) // muzzle glow on the barrels (no extra light: adding one recompiles every shader)
     const x = $('xhair'); x.classList.toggle('hit', F.hitT > 0 && !F.head); x.classList.toggle('head', F.hitT > 0 && F.head);
   }
   // tracers
