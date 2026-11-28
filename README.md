@@ -121,7 +121,7 @@ The APK is a debug build. It installs fine by sideloading, but it is not signed 
 
 ## Graphics
 
-Rendering goes through an HDR pipeline: the scene is drawn into a multisampled half-float target, then ambient occlusion (high quality only), bloom, ACES tone mapping, a per-map colour grade, sharpening, vignette and film grain are applied in one final pass. The **GFX** button cycles High, Medium and Low (Low keeps tone mapping and the grade but drops ambient occlusion, bloom, character shadows and pixel density); `?gfx=low` in the URL forces a tier, and the game steps down on its own if the frame rate stays low.
+Rendering goes through an HDR pipeline: the scene is drawn into a multisampled half-float target, then ambient occlusion (high quality only), bloom, ACES tone mapping, a per-map colour grade, sharpening, vignette and film grain are applied in one final pass. The **GRAPHICS** button in the menu and pause screen cycles High, Medium and Low (Low keeps tone mapping and the grade but drops ambient occlusion, bloom, character shadows and pixel density); `?gfx=low` in the URL forces a tier, and the game steps down on its own if the frame rate stays low.
 
 Roads and ground use full PBR maps with puddles that fill on wet maps and ripple in the rain. Each level mixes a map with a mood (darkness and fog), with height fog, clouds, rain, drifting embers or fireflies, and the squad's flashlight beam at night. Characters get a sky-coloured rim light, a camera fill light, light bleeding through skin, blood that spreads as they take damage, and bullet holes where shots land on bosses. The squad and squad leader are baked with 2048-pixel textures and normal maps (`TEX=2048 NTEX=1024 WHITE_PATCH=1 GUNS=guns.json python bake_mixamo.py -- …`).
 
