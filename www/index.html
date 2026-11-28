@@ -177,11 +177,8 @@ h2{font-family:var(--display);font-size:clamp(30px,9vw,40px);margin:0;color:var(
 <script type="importmap">{"imports":{"three":"./lib/three.module.min.js","three/addons/":"./lib/addons/"}}</script>
 <script type="module">
 import * as THREE from 'three';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const $ = id => document.getElementById(id);
@@ -337,57 +334,241 @@ const sfx = {
 
 /* ================= renderer / scene ================= */
 const canvas = $('c');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-let hiQ = store.get('gfx', 'high') === 'high';
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' }); // anti-aliasing happens in the scene target (MSAA)
+// GRAPHICS: HIGH (default) renders at up to 2x pixel density (3x in first-person boss fights) with ambient occlusion, bloom, sharpening,
+// film grain and lens fringing; MEDIUM drops the ambient occlusion and renders at 1.5x; LOW is 1.25x with tone mapping and grading only
+const GFX_TIERS = ['high', 'medium', 'low'];
+const gfxArg = new URLSearchParams(location.search).get('gfx');
+let gfx = GFX_TIERS.includes(gfxArg) ? gfxArg : GFX_TIERS.includes(store.get('gfx', 'high')) ? store.get('gfx', 'high') : 'high';
+let hiQ = gfx !== 'low'; // character shadows, denser scenery and more particles on MEDIUM and HIGH
 let bossRes = false; // first-person boss fights render at the phone's full pixel density, so the bosses' textures hold up close
-const DPR = () => Math.min(window.devicePixelRatio || 1, hiQ ? (bossRes ? 3 : 2) : 1.25);
+const DPR = () => Math.min(window.devicePixelRatio || 1, gfx === 'high' ? (bossRes ? 3 : 2) : gfx === 'medium' ? (bossRes ? 2 : 1.5) : 1.25);
 renderer.setPixelRatio(DPR());
 renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0;
+renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0; // tone mapping itself happens in the final pass
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(new THREE.Color('#b9cde4'), 60, 240);
 const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 600);
+// height fog for every material: thicker hugging the ground (even close by), thinner up high so tall things stand out against the sky.
+// FOGH x: ground fog amount, y: how much the fog thins with height, z: fall-off per metre, w: ground level (set per map and mood)
+const FOGH = { x: 0, y: .5, z: .09, w: 0 };
+THREE.ShaderChunk.fog_pars_vertex = '#ifdef USE_FOG\n varying float vFogDepth; varying float vFogY;\n#endif';
+THREE.ShaderChunk.fog_vertex = '#ifdef USE_FOG\n vFogDepth = - mvPosition.z; vFogY = (transpose(mat3(viewMatrix)) * (mvPosition.xyz - viewMatrix[3].xyz)).y;\n#endif';
+THREE.ShaderChunk.fog_pars_fragment = `#ifdef USE_FOG
+  uniform vec3 fogColor; uniform vec4 fogH; varying float vFogDepth; varying float vFogY;
+  #ifdef FOG_EXP2
+    uniform float fogDensity;
+  #else
+    uniform float fogNear; uniform float fogFar;
+  #endif
+#endif`;
+THREE.ShaderChunk.fog_fragment = `#ifdef USE_FOG
+  #ifdef FOG_EXP2
+    float fogFactor = 1.0 - exp( - fogDensity * fogDensity * vFogDepth * vFogDepth );
+  #else
+    float fogFactor = smoothstep( fogNear, fogFar, vFogDepth );
+  #endif
+  float fogLow = exp(-max(vFogY - fogH.w, 0.) * fogH.z);
+  fogFactor = max(fogFactor * (1. - fogH.y * (1. - fogLow)), fogH.x * fogLow * smoothstep(3., 30., vFogDepth));
+  gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor );
+#endif`;
+for (const k in THREE.ShaderLib) { const u = THREE.ShaderLib[k].uniforms; if (u && u.fogColor) u.fogH = { value: FOGH }; } // shared by reference
 
-let composer = null, bloomPass = null;
+/* ================= post-processing: HDR scene (MSAA) -> ambient occlusion -> bloom -> one final pass ================= */
+// The final pass does bloom, ACES tone mapping, the per-map grade, sharpening, film grain, lens fringing, the vignette and lightning in one go.
 const GRADE = { tint: { value: new THREE.Color(1, 1, 1) }, sat: { value: 1.12 }, vig: { value: .55 }, flash: { value: 0 } }; // per-map mood, set by setTheme
-function buildComposer() { // HDR render -> bloom -> tone map -> grade/vignette
-  const ext = renderer.extensions, hdr = ext.has('EXT_color_buffer_float') || ext.has('EXT_color_buffer_half_float');
-  const rt = new THREE.WebGLRenderTarget(1, 1, { type: hdr ? THREE.HalfFloatType : THREE.UnsignedByteType, samples: 4 });
-  composer = new EffectComposer(renderer, rt);
-  composer.addPass(new RenderPass(scene, camera));
-  bloomPass = new UnrealBloomPass(new THREE.Vector2(256, 256), .5, .55, hdr ? 1.05 : .82); composer.addPass(bloomPass);
-  composer.addPass(new OutputPass());
-  composer.addPass(new ShaderPass({
-    uniforms: { tDiffuse: { value: null }, tint: GRADE.tint, sat: GRADE.sat, vig: GRADE.vig, flash: GRADE.flash },
-    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }',
-    fragmentShader: `uniform sampler2D tDiffuse; uniform vec3 tint; uniform float sat, vig, flash; varying vec2 vUv;
-      void main(){ vec3 c = texture2D(tDiffuse, vUv).rgb; float l = dot(c, vec3(.299,.587,.114));
-        c = mix(vec3(l), c, sat);                         // per-map saturation (the gloomy maps are a little washed out)
-        c = (c - .5) * 1.06 + .5;                         // contrast
-        c *= mix(tint, vec3(1.), smoothstep(.35, .9, l)); // tint shadows and mids, keep highlights (gates, muzzle flashes) clean
-        c += vec3(.5, .56, .72) * flash;                  // lightning
-        vec2 d = vUv - .5; c *= 1. - dot(d, d) * vig;     // vignette
-        gl_FragColor = vec4(clamp(c, 0., 1.), 1.); }`
-  }));
+const post = { rt: null, ao: null, aoB: null, bloom: null, quad: null, fin: {}, white: null, hdr: true, w: 1, h: 1, d: 1 };
+const FSQ_VS = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0., 1.); }';
+function buildPost() {
+  const ext = renderer.extensions; post.hdr = ext.has('EXT_color_buffer_float') || ext.has('EXT_color_buffer_half_float');
+  const type = post.hdr ? THREE.HalfFloatType : THREE.UnsignedByteType;
+  post.rt = new THREE.WebGLRenderTarget(1, 1, { type, samples: 4, depthTexture: new THREE.DepthTexture(1, 1, THREE.UnsignedIntType) });
+  post.rt.texture.generateMipmaps = false;
+  // ambient occlusion at half resolution: ao in red, view depth in green for the depth-aware blur
+  const aoRT = () => { const t = new THREE.WebGLRenderTarget(1, 1, { type, depthBuffer: false }); t.texture.generateMipmaps = false; return t; };
+  post.ao = aoRT(); post.aoB = aoRT();
+  post.aoMat = new THREE.ShaderMaterial({
+    uniforms: { tDepth: { value: post.rt.depthTexture }, aoTexel: { value: new THREE.Vector2() }, proj: { value: new THREE.Vector2(1, 1) }, cNear: { value: .1 }, cFar: { value: 600 },
+      radius: { value: .9 }, pxScale: { value: 300 }, amount: { value: 1.25 }, fogNear: { value: 60 }, fogFar: { value: 240 } },
+    vertexShader: FSQ_VS, depthTest: false, depthWrite: false,
+    fragmentShader: `#include <packing>
+      uniform highp sampler2D tDepth; uniform vec2 aoTexel, proj; uniform float cNear, cFar, radius, pxScale, amount, fogNear, fogFar; varying vec2 vUv;
+      float vz(vec2 uv) { return perspectiveDepthToViewZ(texture2D(tDepth, uv).x, cNear, cFar); }
+      vec3 vpos(vec2 uv, float z) { return vec3((uv * 2. - 1.) * proj * -z, z); }
+      void main() {
+        float d = texture2D(tDepth, vUv).x;
+        if (d > .99999) { gl_FragColor = vec4(1., 0., 0., 1.); return; } // sky
+        float z = perspectiveDepthToViewZ(d, cNear, cFar);
+        if (z > -1.) { gl_FragColor = vec4(1., z, 0., 1.); return; } // the first-person gun
+        vec3 P = vpos(vUv, z);
+        // surface normal from the depth buffer: on each axis use the neighbour on the same surface (the smaller step)
+        vec2 dx = vec2(aoTexel.x, 0.), dy = vec2(0., aoTexel.y);
+        vec3 pr = vpos(vUv + dx, vz(vUv + dx)), pl = vpos(vUv - dx, vz(vUv - dx)), pu = vpos(vUv + dy, vz(vUv + dy)), pd = vpos(vUv - dy, vz(vUv - dy));
+        vec3 N = normalize(cross(abs(pr.z - z) < abs(z - pl.z) ? pr - P : P - pl, abs(pu.z - z) < abs(z - pd.z) ? pu - P : P - pd));
+        float rPx = min(radius * pxScale / -z, 90.); // the sampling disc in AO pixels, capped so close-ups stay cheap
+        float spin = 6.2831853 * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(.06711056, .00583715)))); // interleaved gradient noise
+        float r2 = radius * radius, sum = 0.;
+        for (int i = 0; i < 12; i++) { // scalable ambient obscurance on a spiral (McGuire et al.)
+          float a = (float(i) + .5) / 12., ang = a * 31.415926 + spin;
+          vec2 suv = vUv + vec2(cos(ang), sin(ang)) * a * rPx * aoTexel;
+          vec3 v = vpos(suv, vz(suv)) - P;
+          float vv = dot(v, v), f = max(r2 - vv, 0.);
+          sum += f * f * f * max((dot(v, N) + z * .004 - .01) / (vv + .02), 0.);
+        }
+        float ao = max(0., 1. - sum * amount * 5. / (r2 * r2 * r2 * 12.));
+        ao = mix(ao, 1., smoothstep(fogNear, fogFar, -z) * .9 + smoothstep(-1.6, -1., z)); // fade into the fog and right in front of the eye
+        gl_FragColor = vec4(ao, z, 0., 1.);
+      }`
+  });
+  post.blurMat = new THREE.ShaderMaterial({
+    uniforms: { tAO: { value: null }, dir: { value: new THREE.Vector2() } }, vertexShader: FSQ_VS, depthTest: false, depthWrite: false,
+    fragmentShader: `uniform sampler2D tAO; uniform vec2 dir; varying vec2 vUv;
+      void main() { // depth-aware gaussian, so occlusion doesn't bleed from a zombie onto the road far behind it
+        vec2 c = texture2D(tAO, vUv).xy; float s = c.x, w = 1., tol = abs(c.y) * .06 + .08;
+        for (int i = 1; i <= 4; i++) for (int k = -1; k <= 1; k += 2) {
+          vec2 t = texture2D(tAO, vUv + dir * float(i * k)).xy; float wi = exp(-float(i * i) * .16) * step(abs(t.y - c.y), tol);
+          s += t.x * wi; w += wi; }
+        gl_FragColor = vec4(s / w, c.y, 0., 1.);
+      }`
+  });
+  post.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), .55, .6, post.hdr ? 1.0 : .82);
+  { const m = post.bloom.materialHighPassFilter; // one bad pixel must never smear across the screen, and lone sparkles shouldn't flare
+    m.fragmentShader = m.fragmentShader.replace('vec4 texel = texture2D( tDiffuse, vUv );', 'vec4 texel = texture2D( tDiffuse, vUv ); texel.rgb = any(isnan(texel.rgb)) ? vec3(0.) : min(texel.rgb, vec3(48.));'); }
+  post.white = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1); post.white.needsUpdate = true;
+  const finMat = (defs) => new THREE.ShaderMaterial({
+    defines: defs, toneMapped: false, depthTest: false, depthWrite: false, vertexShader: FSQ_VS,
+    uniforms: { tScene: { value: post.rt.texture }, tBloom: { value: null }, tAO: { value: post.white }, texel: { value: new THREE.Vector2() }, exposure: { value: 1 },
+      time: { value: 0 }, px: { value: 1 }, sharp: { value: .45 }, grain: { value: .035 }, fringe: { value: .006 }, aoAmt: { value: .85 },
+      tint: GRADE.tint, sat: GRADE.sat, vig: GRADE.vig, flash: GRADE.flash },
+    fragmentShader: `uniform sampler2D tScene, tBloom, tAO; uniform vec2 texel; uniform float exposure, time, px, sharp, grain, fringe, aoAmt, sat, vig, flash; uniform vec3 tint; varying vec2 vUv;
+      vec3 RRTAndODTFit(vec3 v) { vec3 a = v * (v + .0245786) - .000090537; vec3 b = v * (.983729 * v + .4329510) + .238081; return a / b; }
+      vec3 aces(vec3 c) { // three.js ACESFilmicToneMapping, then sRGB
+        const mat3 I = mat3(vec3(.59719, .07600, .02840), vec3(.35458, .90834, .13383), vec3(.04823, .01566, .83777));
+        const mat3 O = mat3(vec3(1.60475, -.10208, -.00327), vec3(-.53108, 1.10813, -.07276), vec3(-.07367, -.00605, 1.07602));
+        c = clamp(O * RRTAndODTFit(I * (c * exposure / .6)), 0., 1.);
+        return mix(c * 12.92, pow(c, vec3(.41666)) * 1.055 - .055, step(.0031308, c)); }
+      float lum(vec3 c) { return dot(c, vec3(.2126, .7152, .0722)); }
+      void main() {
+        vec2 uv = vUv, dc = uv - .5;
+        vec3 c = texture2D(tScene, uv).rgb; if (any(isnan(c))) c = vec3(0.);
+        #ifdef FX
+        float r2 = dot(dc, dc); // lens fringing: red and blue split a hair apart toward the corners
+        c.r = texture2D(tScene, uv - dc * fringe * r2 * 4.).r; c.b = texture2D(tScene, uv + dc * fringe * r2 * 4.).b;
+        #endif
+        float ao = 1.;
+        #ifdef AO
+        ao = mix(1., texture2D(tAO, uv).x, aoAmt * (1. - smoothstep(1., 4., lum(c)))); // lit flames and gates stay bright
+        #endif
+        vec3 bl = vec3(0.);
+        #ifdef BLOOM
+        bl = texture2D(tBloom, uv).rgb;
+        #endif
+        vec3 a = aces(c * ao + bl);
+        #ifdef SHARP
+        { // sharpen against the 4 neighbours, clamped to their range so edges never ring (like contrast-adaptive sharpening)
+          vec3 n1 = aces(texture2D(tScene, uv + vec2(texel.x, 0.)).rgb * ao + bl), n2 = aces(texture2D(tScene, uv - vec2(texel.x, 0.)).rgb * ao + bl);
+          vec3 n3 = aces(texture2D(tScene, uv + vec2(0., texel.y)).rgb * ao + bl), n4 = aces(texture2D(tScene, uv - vec2(0., texel.y)).rgb * ao + bl);
+          vec3 mn = min(min(n1, n2), min(n3, n4)), mx = max(max(n1, n2), max(n3, n4));
+          a = clamp(a + (a - (n1 + n2 + n3 + n4) * .25) * sharp, min(mn, a), max(mx, a)); }
+        #endif
+        float l = lum(a);
+        a = mix(vec3(l), a, sat);                          // per-map saturation (the gloomy maps are a little washed out)
+        a = (a - .5) * 1.06 + .5;                          // contrast
+        a *= mix(tint, vec3(1.), smoothstep(.35, .9, l));  // tint shadows and mids, keep highlights (gates, muzzle flashes) clean
+        a += vec3(.5, .56, .72) * flash;                   // lightning
+        a *= 1. - dot(dc, dc) * vig;                       // vignette
+        #ifdef FX
+        vec2 g = floor(gl_FragCoord.xy / px); float n = fract(sin(dot(g + fract(time * 7.13) * 91.7, vec2(12.9898, 78.233))) * 43758.5453);
+        a += (n - .5) * grain * (1. - l * .6);             // film grain, a little stronger in the shadows
+        #endif
+        gl_FragColor = vec4(clamp(a, 0., 1.), 1.);
+      }`
+  });
+  post.fin = { high: finMat({ AO: 1, BLOOM: 1, SHARP: 1, FX: 1 }), medium: finMat({ BLOOM: 1, SHARP: 1, FX: 1 }), low: finMat({}) };
+  post.quad = new FullScreenQuad(null);
+}
+function setPostSize(w, h, d) {
+  post.w = w; post.h = h; post.d = d;
+  const W = Math.max(1, Math.round(w * d)), H = Math.max(1, Math.round(h * d)), s = d > 2.2 ? 2 : 4;
+  if (post.rt.samples !== s) { post.rt.samples = s; post.rt.dispose(); }
+  post.rt.setSize(W, H);
+  const ad = d > 2.2 ? 3 : 2, aw = Math.max(1, Math.round(W / ad)), ah = Math.max(1, Math.round(H / ad)); // AO at a half (a third at 3x density)
+  post.ao.setSize(aw, ah); post.aoB.setSize(aw, ah); post.aoMat.uniforms.aoTexel.value.set(1 / aw, 1 / ah);
+  const bs = gfx === 'high' ? 1.25 : 1; post.bloom.setSize(Math.round(w * bs), Math.round(h * bs));
+  for (const m of Object.values(post.fin)) { m.uniforms.texel.value.set(1 / W, 1 / H); m.uniforms.px.value = Math.max(1, d * .75); }
+}
+function renderBloom(src) { // UnrealBloomPass up to its composite (the final pass adds it, so the scene target is never blended into)
+  const B = post.bloom, q = B.fsQuad;
+  B.highPassUniforms.tDiffuse.value = src; B.highPassUniforms.luminosityThreshold.value = B.threshold;
+  q.material = B.materialHighPassFilter; renderer.setRenderTarget(B.renderTargetBright); q.render(renderer);
+  let inp = B.renderTargetBright;
+  for (let i = 0; i < B.nMips; i++) {
+    const m = B.separableBlurMaterials[i]; q.material = m;
+    m.uniforms.colorTexture.value = inp.texture; m.uniforms.direction.value = UnrealBloomPass.BlurDirectionX;
+    renderer.setRenderTarget(B.renderTargetsHorizontal[i]); q.render(renderer);
+    m.uniforms.colorTexture.value = B.renderTargetsHorizontal[i].texture; m.uniforms.direction.value = UnrealBloomPass.BlurDirectionY;
+    renderer.setRenderTarget(B.renderTargetsVertical[i]); q.render(renderer);
+    inp = B.renderTargetsVertical[i];
+  }
+  const cm = B.compositeMaterial; cm.uniforms.bloomStrength.value = B.strength; cm.uniforms.bloomRadius.value = B.radius; cm.uniforms.bloomTintColors.value = B.bloomTintColors;
+  q.material = cm; renderer.setRenderTarget(B.renderTargetsHorizontal[0]); q.render(renderer);
+  return B.renderTargetsHorizontal[0].texture;
+}
+function renderFrame() {
+  renderer.setRenderTarget(post.rt); renderer.render(scene, camera);
+  const fin = post.fin[gfx], U = fin.uniforms;
+  if (gfx === 'high' && post.hdr) {
+    const A = post.aoMat.uniforms, P = camera.projectionMatrix.elements;
+    A.proj.value.set(1 / P[0], 1 / P[5]); A.cNear.value = camera.near; A.cFar.value = camera.far; A.pxScale.value = post.ao.height * P[5] * .5;
+    A.fogNear.value = scene.fog.near; A.fogFar.value = scene.fog.far;
+    post.quad.material = post.aoMat; renderer.setRenderTarget(post.ao); post.quad.render(renderer);
+    const B = post.blurMat.uniforms; post.quad.material = post.blurMat;
+    B.tAO.value = post.ao.texture; B.dir.value.set(1 / post.ao.width, 0); renderer.setRenderTarget(post.aoB); post.quad.render(renderer);
+    B.tAO.value = post.aoB.texture; B.dir.value.set(0, 1 / post.ao.height); renderer.setRenderTarget(post.ao); post.quad.render(renderer);
+    U.tAO.value = post.ao.texture;
+  }
+  if (gfx !== 'low') U.tBloom.value = renderBloom(post.rt.texture);
+  U.exposure.value = renderer.toneMappingExposure; U.time.value = performance.now() / 1000;
+  post.quad.material = fin; renderer.setRenderTarget(null); post.quad.render(renderer);
 }
 function resize() {
-  const w = canvas.clientWidth || innerWidth, h = canvas.clientHeight || innerHeight;
-  renderer.setPixelRatio(DPR()); renderer.setSize(w, h, false);
-  if (composer) { composer.setPixelRatio(DPR()); composer.setSize(w, h); }
+  const w = canvas.clientWidth || innerWidth, h = canvas.clientHeight || innerHeight, d = DPR();
+  renderer.setPixelRatio(d); renderer.setSize(w, h, false);
+  if (post.rt) setPostSize(w, h, d);
   const a = w / h; camera.aspect = a;
   camera.fov = clamp(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(21)) / a) * 180 / Math.PI, 48, 74);
   camera.updateProjectionMatrix();
 }
 addEventListener('resize', resize);
 
-const sky = new THREE.Mesh(new THREE.SphereGeometry(500, 32, 16), new THREE.ShaderMaterial({
+const sky = new THREE.Mesh(new THREE.SphereGeometry(500, 48, 24), new THREE.ShaderMaterial({
   side: THREE.BackSide, depthWrite: false, fog: false,
-  uniforms: { top: { value: new THREE.Color('#2f6fd0') }, mid: { value: new THREE.Color('#7fb2ea') }, hor: { value: new THREE.Color('#dbe7f2') }, sun: { value: new THREE.Vector3(.45, .35, -1).normalize() }, glow: { value: 1 } },
+  uniforms: { top: { value: new THREE.Color('#2f6fd0') }, mid: { value: new THREE.Color('#7fb2ea') }, hor: { value: new THREE.Color('#dbe7f2') }, sun: { value: new THREE.Vector3(.45, .35, -1).normalize() }, glow: { value: 1 },
+    dark: { value: 0 }, cloud: { value: .5 }, time: { value: 0 }, flash: GRADE.flash },
   vertexShader: `varying vec3 vP; void main(){ vP = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }`,
-  fragmentShader: `uniform vec3 top, mid, hor, sun; uniform float glow; varying vec3 vP;
-    void main(){ float h = vP.y; vec3 c = mix(hor, mid, smoothstep(-.02,.2,h)); c = mix(c, top, smoothstep(.2,.75,h));
-      float s = max(dot(normalize(vP), sun), 0.); c += vec3(1.,.9,.75) * (pow(s, 60.) * 1.2 + pow(s, 8.) * .18) * glow;
+  fragmentShader: `uniform vec3 top, mid, hor, sun; uniform float glow, dark, cloud, time, flash; varying vec3 vP;
+    float h2(vec2 p) { vec3 q = fract(vec3(p.xyx) * .1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
+    float n2(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f); return mix(mix(h2(i), h2(i + vec2(1., 0.)), f.x), mix(h2(i + vec2(0., 1.)), h2(i + vec2(1., 1.)), f.x), f.y); }
+    float fbm(vec2 p) { float a = .5, s = 0.; for (int i = 0; i < 5; i++) { s += a * n2(p); p = p * 2.07 + vec2(1.7, 9.2); a *= .5; } return s; }
+    void main(){ vec3 d = normalize(vP); float h = d.y; vec3 c = mix(hor, mid, smoothstep(-.02,.2,h)); c = mix(c, top, smoothstep(.2,.75,h));
+      float s = max(dot(d, sun), 0.);
+      c += vec3(1.,.9,.75) * (pow(s, 60.) * 1.2 + pow(s, 8.) * .18) * glow;
+      // stars, only on dark nights
+      vec2 sp = vec2(atan(d.z, d.x) * 180., h * 360.); float st = step(.997, h2(floor(sp))) * smoothstep(.04, .35, h) * smoothstep(.3, .8, dark);
+      c += vec3(.75, .82, 1.) * st * (.5 + .5 * sin(time * 3. + h2(floor(sp) + 3.) * 40.)) * .7;
+      // the sun at dusk, the moon at night (bright enough to bloom)
+      float disc = smoothstep(.99935, .9997, s) * smoothstep(-.02, .03, h);
+      c += mix(vec3(6., 4.2, 2.6), vec3(1.9, 2., 2.15) * (.82 + .18 * n2(d.xy * 260.)), smoothstep(.15, .6, dark)) * disc;
+      c += vec3(.55, .6, .7) * pow(s, 24.) * .35 * dark;
+      // clouds drifting over a flat sky plane, lit from the sun/moon side, flickering with lightning
+      if (h > -.03) {
+        vec2 uv = d.xz / (h + .16) * .9 + vec2(time * .012, time * .004);
+        float n = fbm(uv), cov = smoothstep(1.05 - cloud, 1.3 - cloud * .6, n + .12) * smoothstep(-.03, .1, h);
+        vec3 lit = mix(hor, mid, .4) * 1.25 + mix(vec3(1., .8, .6), vec3(.7, .75, .85), dark) * (pow(s, 5.) * .9 * (1. - .5 * dark) + pow(s, 2.) * .15);
+        vec3 cc = mix(mix(top, mid, .5) * .5, lit, smoothstep(.35, .85, n)) + vec3(.6, .65, .8) * flash * 9. * n;
+        c = mix(c, cc, cov * .92);
+      }
       gl_FragColor = vec4(c,1.);
       #include <tonemapping_fragment>
       #include <colorspace_fragment>
@@ -437,6 +618,51 @@ const windowTex = canvasTex(128, 256, (g, w, h) => {
 });
 const glowTex = canvasTex(64, 64, (g, w) => { const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32); gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(.25, 'rgba(255,255,255,.75)'); gr.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = gr; g.fillRect(0, 0, w, w); });
 
+/* ================= PBR road and ground surfaces (tools/textures/make_ground.py) ================= */
+// each surface has a colour map, a normal map and an ORM map: R occlusion, G roughness, B where rain water pools.
+// The terrain shader adds slow world-space variation (so tiles don't repeat visibly), floods the low spots per map and mood,
+// darkens and glosses everything when wet, and rings the puddles with raindrops while it rains.
+const WET = { value: 0 }, RAIN = { value: 0 }, UTIME = { value: 0 };
+const texLoader = new THREE.TextureLoader(), texCache = {}, surfCache = {};
+const loadTex = (file, srgb) => texCache[file] ||= texLoader.loadAsync('tex/' + file).then(t => { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = maxAniso; t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace; return t; });
+const surface = name => surfCache[name] ||= Promise.all([loadTex(name + '-c.webp', true), loadTex(name + '-n.webp'), loadTex(name + '-orm.webp')])
+  .then(([map, normalMap, orm]) => ({ map, normalMap, orm })).catch(e => { console.warn('surface', name, e); return null; });
+const TERRAIN_GLSL = `varying vec2 vTW; uniform float wetAmt, rainAmt, uTime;
+float th12(vec2 p) { vec3 q = fract(vec3(p.xyx) * .1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
+float tvn(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f);
+  return mix(mix(th12(i), th12(i + vec2(1., 0.)), f.x), mix(th12(i + vec2(0., 1.)), th12(i + vec2(1., 1.)), f.x), f.y); }
+vec2 drops(vec2 p, float t) { // raindrop rings in puddles: one drop per cell, slope of the ring in xz
+  vec2 c = floor(p), f = fract(p) - .5, o = vec2(th12(c), th12(c + 17.3)) - .5; float ph = fract(t * 1.3 + th12(c + 5.1));
+  vec2 d = f - o * .6; float r = length(d), ring = ph * .5, k = sin((r - ring) * 55.) * smoothstep(.07, 0., abs(r - ring)) * (1. - ph);
+  return d / max(r, 1e-3) * k; }`;
+function terrainMat(S, rx, ry, { puddles = false, macro = .16, rough = 1, nScale = 1, fallback = null, color = '#ffffff' } = {}) {
+  if (!S) return std(color, { map: fallback, roughness: .92 });
+  const tx = t => { const c = t.clone(); c.repeat.set(rx, ry); c.needsUpdate = true; return c; };
+  const orm = tx(S.orm);
+  const m = new THREE.MeshStandardMaterial({ color, map: tx(S.map), normalMap: tx(S.normalMap), normalScale: new THREE.Vector2(nScale, nScale), roughnessMap: orm, aoMap: orm, aoMapIntensity: 1, roughness: rough, metalness: 0 });
+  m.onBeforeCompile = sh => {
+    sh.uniforms.wetAmt = WET; sh.uniforms.rainAmt = RAIN; sh.uniforms.uTime = UTIME;
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vTW;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\nvTW = (modelMatrix * vec4(transformed, 1.)).xz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\n' + TERRAIN_GLSL)
+      .replace('#include <map_fragment>', `#include <map_fragment>
+      float mac = tvn(vTW * .045) * .6 + tvn(vTW * .17 + 7.) * .4;
+      diffuseColor.rgb *= ${(1 - macro).toFixed(3)} + ${(2 * macro).toFixed(3)} * mac;
+      float wet = 0.;
+      ${puddles ? `{ float lvl = texture2D(roughnessMap, vRoughnessMapUv).b * .8 + tvn(vTW * .11 + 3.) * .45 - .2, t = 1. - wetAmt * .72;
+        wet = smoothstep(t - .035, t + .015, lvl) * step(.01, wetAmt); }` : ''}
+      diffuseColor.rgb *= mix(1. - .22 * wetAmt, .42, wet); // damp ground is darker; standing water darker still`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+      roughnessFactor = mix(roughnessFactor * (1. - .32 * wetAmt), .03, wet);`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+      if (wet > 0.) { normal = normalize(mix(normal, nonPerturbedNormal, wet));
+        if (rainAmt > 0.) { vec2 sl = (drops(vTW * 2.2, uTime) + drops(vTW * 2.2 + 11.7, uTime * 1.13 + .5)) * .35 * rainAmt * wet;
+          normal = normalize(normal + (viewMatrix * vec4(sl.x, 0., sl.y, 0.)).xyz); } }`);
+  };
+  m.customProgramCacheKey = () => 'terrain' + (puddles ? 'P' : '') + macro;
+  return m;
+}
+
 /* ================= world ================= */
 const ROAD_W = 9, HALF = ROAD_W / 2, ROAD_LEN = 1000, ROAD_Z0 = 80;
 const std = (color, o = {}) => new THREE.MeshStandardMaterial(Object.assign({ color, roughness: .8, metalness: 0 }, o));
@@ -450,7 +676,7 @@ let roadMesh = null;
 function buildBridge(grp) {
   const midZ = ROAD_Z0 - ROAD_LEN / 2;
   roadTex.repeat.set(1, ROAD_LEN / 12);
-  const road = new THREE.Mesh(new THREE.PlaneGeometry(ROAD_W, ROAD_LEN).rotateX(-Math.PI / 2), std('#ffffff', { map: roadTex, roughness: .92 }));
+  const road = new THREE.Mesh(new THREE.PlaneGeometry(ROAD_W, ROAD_LEN).rotateX(-Math.PI / 2), std('#ffffff', { map: roadTex, roughness: .92 })); // the map's road material replaces this (roadMat)
   road.position.z = midZ; road.receiveShadow = true; scene.add(road); roadMesh = road;
   const deck = new THREE.Mesh(new THREE.BoxGeometry(ROAD_W + 1.8, 1.6, ROAD_LEN), std('#6b6d75')); deck.position.set(0, -.81, midZ); grp.add(deck);
   const lip = new THREE.Mesh(new THREE.BoxGeometry(ROAD_W + 2.2, .35, ROAD_LEN), std('#8b8a86')); lip.position.set(0, -1.6, midZ); grp.add(lip);
@@ -503,6 +729,7 @@ const std2 = (c, o = {}) => new THREE.MeshStandardMaterial(Object.assign({ color
 const box = (w, h, d, tx = 0, ty = 0, tz = 0) => new THREE.BoxGeometry(w, h, d).translate(tx, ty, tz);
 const flat = std2;
 const RIM_AMT = { value: 1 }; // the cool rim light on characters; turned down in first person, where it washed the bosses out
+const RIM_COL = { value: new THREE.Color(.3, .37, .5) }; // the rim light takes the sky's colour (set per map and mood)
 async function loadVAT(name, max, opts = {}) {
   const meta = await (await fetch(`models/${name}.json`)).json();
   // big boss bins ship in pieces (name.bin, name.1.bin, …) so no single file tops 14 MB
@@ -542,7 +769,7 @@ async function loadVAT(name, max, opts = {}) {
   g.setIndex(new THREE.BufferAttribute(Uint16Array.from(new Uint32Array(buf, o.idx, meta.indexCount)), 1));
   g.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, .5, 0), 1e4);
   const dyn = (n, k, fill = 0) => new THREE.InstancedBufferAttribute(new Float32Array(n * k).fill(fill), k).setUsage(THREE.DynamicDrawUsage);
-  const iAnim = dyn(max, 3), iTint = dyn(max, 3, 1), iFx = dyn(max, 3); // iFx: weapon variant, hit flash, hidden body-part mask
+  const iAnim = dyn(max, 3), iTint = dyn(max, 3, 1), iFx = dyn(max, 4); // iFx: weapon variant, hit flash, hidden body-part mask, blood (0..1)
   g.setAttribute('iAnim', iAnim); g.setAttribute('iTint', iTint); g.setAttribute('iFx', iFx);
   const tex = PK ? new THREE.DataTexture(vat, meta.W, meta.rows * meta.frames, THREE.RGIntegerFormat, THREE.UnsignedIntType)
     : new THREE.DataTexture(vat, meta.W, meta.rows * meta.frames, THREE.RGBAFormat, THREE.HalfFloatType);
@@ -563,6 +790,7 @@ async function loadVAT(name, max, opts = {}) {
   }
   meta.hasRoar = !!meta.clips.roar; if (!meta.clips.roar) meta.clips.roar = meta.clips.punch;
   for (const k of ['walk', 'run', 'punch', 'death', 'hit']) if (!meta.clips[k]) meta.clips[k] = meta.clips.walk || Object.values(meta.clips)[0]; // missing clips fall back to walking
+  const wounds = new Float32Array(48); // 12 bullet holes: rest-pose position + radius
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: !textured, map, normalMap: nMap, roughness: textured ? .82 : .7, metalness: .05, side: opts.gore ? THREE.DoubleSide : THREE.FrontSide });
   mat.onBeforeCompile = sh => {
     sh.uniforms.vatTex = { value: tex };
@@ -580,30 +808,57 @@ ${NVATF}`)
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
 uniform highp ${SAMP} vatTex;
-attribute vec3 iAnim; attribute vec3 iTint; attribute vec3 iFx; attribute float aTint; attribute float aPart; attribute float aGroup;
+attribute vec3 iAnim; attribute vec3 iTint; attribute vec4 iFx; attribute float aTint; attribute float aPart; attribute float aGroup;
+varying float vGun, vGore, vGrp, vWnd; varying vec3 vRest;
 ${VATF}`)
       .replace('#include <begin_vertex>', `vec3 transformed = mix(vatFetch(iAnim.x), vatFetch(iAnim.y), iAnim.z);
 if (aPart > .5 && abs(aPart - iFx.x) > .5) transformed = vec3(0.);
-if (((int(iFx.z + .5) >> int(aGroup + .5)) & 1) == 1) transformed = vec3(0.); // severed body part`)
+if (((int(iFx.z + .5) >> int(aGroup + .5)) & 1) == 1) transformed = vec3(0.); // severed body part
+vGun = aPart > .5 ? 1. : 0.; vWnd = step(9.5, iFx.w); vGore = iFx.w - 10. * vWnd; vGrp = aGroup; vRest = position; // rest pose: blood sticks to the body as it moves`)
       .replace('#include <color_vertex>', `#include <color_vertex>
 vColor.rgb = mix(vColor.rgb, iTint, aTint);
 vColor.rgb = iFx.y >= 0. ? mix(vColor.rgb, vec3(1., .82, .78), iFx.y) : mix(vColor.rgb, vec3(.045, .038, .032), -iFx.y); // hit flash / charred`);
-    sh.uniforms.rimAmt = RIM_AMT;
-    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform float rimAmt;').replace('#include <color_fragment>', `#include <color_fragment>
-      if (!gl_FrontFacing) diffuseColor.rgb = vec3(.3, .015, .012); // the inside of a body is red`).replace('#include <opaque_fragment>', `
-      float rim = pow(1. - clamp(dot(normal, normalize(vViewPosition)), 0., 1.), 3.);
-      outgoingLight += vec3(.55, .68, .9) * rim * .55 * rimAmt;   // cool sky rim light separates characters from the road
+    sh.uniforms.rimAmt = RIM_AMT; sh.uniforms.rimCol = RIM_COL; sh.uniforms.uWound = { value: wounds };
+    const skin = opts.gore ? 'vec3(.85, .3, .22)' : 'vec3(.55, .34, .26)', wet = opts.gore ? .58 : .8; // zombies: wet skin that light bleeds through
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+uniform float rimAmt; uniform vec3 rimCol; uniform vec4 uWound[12]; varying float vGun, vGore, vGrp, vWnd; varying vec3 vRest; float blood = 0.;
+float bh3(vec3 p) { p = fract(p * .1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
+float bn3(vec3 p) { vec3 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f);
+  return mix(mix(mix(bh3(i), bh3(i + vec3(1, 0, 0)), f.x), mix(bh3(i + vec3(0, 1, 0)), bh3(i + vec3(1, 1, 0)), f.x), f.y),
+             mix(mix(bh3(i + vec3(0, 0, 1)), bh3(i + vec3(1, 0, 1)), f.x), mix(bh3(i + vec3(0, 1, 1)), bh3(i + vec3(1, 1, 1)), f.x), f.y), f.z); }`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+      if (!gl_FrontFacing) diffuseColor.rgb = vec3(.3, .015, .012); // the inside of a body is red
+      else if (vGore > .01) { // blood spreads over the body as it takes damage, torso and head first
+        float bn = bn3(vRest * 9.) * .62 + bn3(vRest * 27. + 4.) * .38 + (vGrp < 1.5 ? .1 : -.08);
+        blood = smoothstep(1.02 - vGore * .62, 1.08 - vGore * .62, bn); diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.13, .008, .006), blood * .92); }
+      if (vWnd > .5 && gl_FrontFacing) for (int i = 0; i < 12; i++) { // bullet holes where shots landed (addWound), blood running down from each
+        vec4 w = uWound[i]; if (w.w <= 0.) continue;
+        vec3 d = vRest - w.xyz; d.y = d.y > 0. ? d.y : d.y * .42;
+        float r = length(d) / w.w, n = bn3(vRest * 150. + float(i) * 7.3);
+        float ring = smoothstep(1.6, .45, r + n * .4), hole = smoothstep(.4, .26, r + n * .1);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.1, .006, .004), ring * .88); diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.012, .002, .002), hole);
+        blood = max(blood, ring); }`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+      roughnessFactor = mix(mix(${wet.toFixed(2)}, .44, vGun), .2, blood); // guns are worn metal, fresh blood is glossy`)
+      .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
+      metalnessFactor = mix(metalnessFactor, .45, vGun);`)
+      .replace('#include <lights_physical_pars_fragment>', THREE.ShaderChunk.lights_physical_pars_fragment.replace(
+        'reflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseColor );',
+        `reflectedLight.directDiffuse += (irradiance + directLight.color * ${skin} * (saturate((dot(geometryNormal, directLight.direction) + .5) / 1.5) - dotNL) * (1. - vGun)) * BRDF_Lambert( material.diffuseColor );`))
+      .replace('#include <opaque_fragment>', `
+      float rim = pow(1. - clamp(dot(normal, normalize(vViewPosition)), 0., 1.), 3.), up = dot(normal, normalize((viewMatrix * vec4(0., 1., 0., 0.)).xyz)) * .5 + .5;
+      outgoingLight += rimCol * rim * (.35 + .65 * up) * rimAmt;   // sky-coloured rim light from above separates characters from the road
       #include <opaque_fragment>`);
   };
   // the shaders inline this model's texture layout, so models must not share a compiled program
-  const layoutKey = `vat-${meta.W}-${meta.rows}-${textured ? 'tex' : 'col'}${nMap ? '-nm' : ''}${PK ? '-pk-' + name : ''}`; mat.customProgramCacheKey = () => layoutKey;
+  const layoutKey = `vat-${meta.W}-${meta.rows}-${textured ? 'tex' : 'col'}${nMap ? '-nm' : ''}${PK ? '-pk-' + name : ''}${opts.gore ? '-g' : ''}`; mat.customProgramCacheKey = () => layoutKey;
   const depthMat = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, side: opts.gore ? THREE.DoubleSide : THREE.FrontSide });
   depthMat.customProgramCacheKey = () => layoutKey;
   depthMat.onBeforeCompile = sh => {
     sh.uniforms.vatTex = { value: tex };
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
-uniform highp ${SAMP} vatTex; attribute vec3 iAnim; attribute vec3 iFx; attribute float aPart; attribute float aGroup;
+uniform highp ${SAMP} vatTex; attribute vec3 iAnim; attribute vec4 iFx; attribute float aPart; attribute float aGroup;
 ${VATF}`)
       .replace('#include <begin_vertex>', `vec3 transformed = mix(vatFetch(iAnim.x), vatFetch(iAnim.y), iAnim.z);
 if (aPart > .5 && abs(aPart - iFx.x) > .5) transformed = vec3(0.);
@@ -624,7 +879,27 @@ if (((int(iFx.z + .5) >> int(aGroup + .5)) & 1) == 1) transformed = vec3(0.); //
     for (const v of idx) if (grp[v] === 1) headR = Math.max(headR, Math.hypot(rd(v, 0) - parts[3], rd(v, 1) - parts[4], rd(v, 2) - parts[5]));
     if (!cs[1]) parts = null;
   }
-  return { meta, mesh, iAnim, iTint, iFx, clips: meta.clips, n: 0, max, parts, headR, maps: [tex, nTex, map, nMap].filter(Boolean), depthMat };
+  return { meta, mesh, iAnim, iTint, iFx, clips: meta.clips, n: 0, max, parts, headR, maps: [tex, nTex, map, nMap].filter(Boolean), depthMat, wounds, woundN: 0, woundZ: null, rest: pos, rd, gore: !!opts.gore };
+}
+// a bullet hole where a shot hit zombie z (bosses and brutes): the nearest point of its current pose, pinned in the rest pose so it moves with the body.
+// worldPoint: THREE.Vector3 (or {x, y, z}); size: hole radius in metres. Each model keeps the last 12 holes of one zombie.
+function addWound(z, worldPoint, size = .12) {
+  const R = z && z.model; if (!R || !R.gore || !z._clip || !R.rest) return false;
+  if (R.woundZ !== z) { R.wounds.fill(0); R.woundN = 0; R.woundZ = z; }
+  const c = R.clips[z._clip], t = z._at; let p, fa, fb;
+  if (c.loop) { p = (((t / c.dur) % 1) + 1) % 1 * c.frames; fa = Math.floor(p); fb = (fa + 1) % c.frames; }
+  else { p = clamp(t / c.dur, 0, 1) * (c.frames - 1); fa = Math.floor(p); fb = Math.min(fa + 1, c.frames - 1); }
+  const f = p - fa, sc = zScale(z), cy = Math.cos(z.yaw || 0), sy = Math.sin(z.yaw || 0), dx = worldPoint.x - z.x, dz = worldPoint.z - z.z;
+  const lx = (dx * cy - dz * sy) / sc, ly = (worldPoint.y - (z.lift || 0)) / sc, lz = (dx * sy + dz * cy) / sc;
+  const V = R.meta.V, stride = R.meta.rows * R.meta.W, A = (c.start + fa) * stride, B = (c.start + fb) * stride, rd = R.rd, step = Math.max(1, Math.floor(V / 7000));
+  let best = -1, bd = Infinity;
+  for (let v = 0; v < V; v += step) {
+    const x = rd(A + v, 0) + (rd(B + v, 0) - rd(A + v, 0)) * f - lx, y = rd(A + v, 1) + (rd(B + v, 1) - rd(A + v, 1)) * f - ly, w = rd(A + v, 2) + (rd(B + v, 2) - rd(A + v, 2)) * f - lz;
+    const d = x * x + y * y + w * w; if (d < bd) { bd = d; best = v; }
+  }
+  if (best < 0) return false;
+  const k = (R.woundN++ % 12) * 4; R.wounds[k] = R.rest[best * 3]; R.wounds[k + 1] = R.rest[best * 3 + 1]; R.wounds[k + 2] = R.rest[best * 3 + 2]; R.wounds[k + 3] = size / sc;
+  return true;
 }
 // world position of body part g of zombie z as last drawn (null if the model has no part data)
 function partWorld(z, g, out) {
@@ -643,12 +918,12 @@ function setAnim(R, i, clip, t) {
   else { p = clamp(t / c.dur, 0, 1) * (c.frames - 1); fa = Math.floor(p); fb = Math.min(fa + 1, c.frames - 1); }
   R.iAnim.setXYZ(i, c.start + fa, c.start + fb, p - fa);
 }
-function pushInst(R, x, y, z, yaw, scale, clip, t, tint, variant = 0, flash = 0, mask = 0, tilt = 0) {
+function pushInst(R, x, y, z, yaw, scale, clip, t, tint, variant = 0, flash = 0, mask = 0, tilt = 0, gore = 0) {
   if (R.max && R.n >= R.max) return;
   const i = R.n++;
   if (tilt) { _e.set(tilt, yaw, 0); _q.setFromEuler(_e); } else _q.setFromAxisAngle(Y_AXIS, yaw); _v.set(x, y, z); _sv.set(scale, scale, scale);
   R.mesh.setMatrixAt(i, _m.compose(_v, _q, _sv));
-  setAnim(R, i, clip, t); R.iTint.setXYZ(i, tint.r, tint.g, tint.b); R.iFx.setXYZ(i, variant, flash, mask);
+  setAnim(R, i, clip, t); R.iTint.setXYZ(i, tint.r, tint.g, tint.b); R.iFx.setXYZW(i, variant, flash, mask, gore);
 }
 function flushInst(R) {
   R.mesh.count = R.n; R.mesh.instanceMatrix.needsUpdate = true;
@@ -1118,17 +1393,24 @@ const CAR = (() => {
 const CAR_COLS = ['#7d2a22', '#2c4a6e', '#c9c4b8', '#3b4a35', '#a8781c', '#2b2b2e', '#5a5f66', '#8a3d1a'];
 function carList(xs, every, jitter = 6) { const l = []; for (let z = ROAD_Z0 - 15; z > Z_MIN; z -= every * rand(.6, 1.4)) { const x = pick(xs); l.push({ x: x + rand(-.4, .4), z: z + rand(-jitter, jitter), ry: (Math.random() < .5 ? 0 : Math.PI) + rand(-.4, .4), rz: Math.random() < .12 ? rand(-.25, .25) : 0, col: Math.random() < .25 ? '#2a2420' : pick(CAR_COLS) }); } return l; }
 function placeCars(grp, list) { place(grp, CAR, list, { cast: false, tintColors: t => new THREE.Color(t.col) }); for (const im of grp.children) if (im.isInstancedMesh && im.instanceColor) im.instanceColor.needsUpdate = true; }
-function groundPlane(grp, tex, width, rep, y = -.03) {
-  tex.repeat.set(width / rep, ROAD_LEN / rep);
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(width, ROAD_LEN + 200).rotateX(-Math.PI / 2), std('#ffffff', { map: tex, roughness: .95 }));
+async function groundPlane(grp, name, width, rep, y = -.03) {
+  const S = await surface(name), tex = GROUND[name]; tex.repeat.set(width / rep, (ROAD_LEN + 200) / rep);
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(width, ROAD_LEN + 200).rotateX(-Math.PI / 2), terrainMat(S, width / rep, (ROAD_LEN + 200) / rep, { fallback: tex, macro: .2 }));
   m.position.set(0, y, ROAD_Z0 - ROAD_LEN / 2); m.receiveShadow = true; grp.add(m); return m;
+}
+// the road surface for each road kind, at 18 m per tile (canvas fallback if the textures can't load)
+const roadMats = {};
+async function roadMat(kind) {
+  if (roadMats[kind]) return roadMats[kind];
+  const S = await surface('road-' + kind), fb = ROADS[kind]; fb.repeat.set(1, ROAD_LEN / 12);
+  return roadMats[kind] ||= terrainMat(S, 1, ROAD_LEN / 18, { puddles: true, macro: .12, fallback: fb });
 }
 const along = (step, fn, z0 = ROAD_Z0 + 20) => { const l = []; for (let z = z0; z > Z_MIN; z -= step) fn(z, l); return l; };
 const dens = () => hiQ ? 1 : .6;
 
 async function buildDowntown(grp) {
   const [med, small, light, traffic, stop, bollard, planter] = await Promise.all(['Building_Medium_2_001', 'Building_Small_1', 'Streetlight_Single', 'TrafficLight', 'Sign_Stop', 'Prop_Bollard', 'Prop_Planter_Single'].map(loadGLB));
-  groundPlane(grp, GROUND.concrete, 120, 6, -.05);
+  await groundPlane(grp, 'concrete', 120, 6, -.05);
   // sidewalks: paving slabs raised behind a granite curb
   const slabTex = canvasTex(256, 256, (g, w, h) => { g.fillStyle = '#a7a59f'; g.fillRect(0, 0, w, h); speckle(g, w, h, 2500, .08);
     g.strokeStyle = 'rgba(60,58,55,.55)'; g.lineWidth = 3; for (let k = 0; k <= 256; k += 128) { g.beginPath(); g.moveTo(k, 0); g.lineTo(k, h); g.stroke(); g.beginPath(); g.moveTo(0, k); g.lineTo(w, k); g.stroke(); }
@@ -1162,8 +1444,8 @@ async function buildDowntown(grp) {
 async function buildForest(grp) {
   const names = ['Pine_1', 'Pine_2', 'CommonTree_1', 'CommonTree_2', 'Birch_1', 'Bush_Common', 'Bush_Large', 'Fern_1', 'Rock_Medium_1', 'Rock_Big_1', 'Grass_Common_Tall'];
   const M = Object.fromEntries((await Promise.all(names.map(loadGLB))).map((m, i) => [names[i], m]));
-  groundPlane(grp, GROUND.grass, 300, 8);
-  const shoulder = new THREE.Mesh(new THREE.PlaneGeometry(ROAD_W + 3, ROAD_LEN + 200).rotateX(-Math.PI / 2), std('#ffffff', { map: (() => { const t = GROUND.dirt.clone(); t.needsUpdate = true; t.repeat.set(2, ROAD_LEN / 6); return t; })(), roughness: 1 }));
+  await groundPlane(grp, 'grass', 300, 8);
+  const shoulder = new THREE.Mesh(new THREE.PlaneGeometry(ROAD_W + 3, ROAD_LEN + 200).rotateX(-Math.PI / 2), terrainMat(await surface('dirt'), 2, (ROAD_LEN + 200) / 6, { fallback: (() => { const t = GROUND.dirt.clone(); t.needsUpdate = true; t.repeat.set(2, ROAD_LEN / 6); return t; })(), macro: .2 }));
   shoulder.position.set(0, -.015, ROAD_Z0 - ROAD_LEN / 2); shoulder.receiveShadow = true; grp.add(shoulder);
   const trees = { Pine_1: [], Pine_2: [], CommonTree_1: [], CommonTree_2: [], Birch_1: [] }, kinds = Object.keys(trees);
   along(6.5 / dens(), (z, l) => { for (const s of [-1, 1]) { trees[pick(kinds)].push({ x: s * rand(HALF + 3.5, HALF + 9), z: z + rand(-2, 2), ry: rand(0, TAU), s: rand(.9, 1.35) }); if (Math.random() < .45) trees[pick(['Pine_1', 'Pine_2'])].push({ x: s * rand(HALF + 11, 34), z: z + rand(-2, 2), ry: rand(0, TAU), s: rand(1.3, 2.1) }); } });
@@ -1177,7 +1459,7 @@ async function buildForest(grp) {
 async function buildDesert(grp) {
   const names = ['Rock_Big_1', 'Rock_Medium_1', 'Rock_Medium_2', 'DeadTree_1', 'DeadTree_2', 'Bush_Common'];
   const M = Object.fromEntries((await Promise.all(names.map(loadGLB))).map((m, i) => [names[i], m]));
-  groundPlane(grp, GROUND.sand, 600, 10);
+  await groundPlane(grp, 'sand', 600, 10);
   const sandMat = std('#d9b77f', { flatShading: true, roughness: 1 }), mesaMat = std('#b8643a', { flatShading: true, roughness: .95 });
   // dunes and distant mesas
   const dune = new THREE.IcosahedronGeometry(1, 1), mesa = new THREE.CylinderGeometry(1, 1.15, 1, 7);
@@ -1203,7 +1485,7 @@ async function buildDesert(grp) {
 async function buildDeadWoods(grp) {
   const names = ['TwistedTree_1', 'DeadTree_1', 'DeadTree_2', 'Rock_Medium_1', 'Rock_Big_1', 'Bush_Large', 'Fern_1'];
   const M = Object.fromEntries((await Promise.all(names.map(loadGLB))).map((m, i) => [names[i], m]));
-  groundPlane(grp, GROUND.deadgrass, 300, 8);
+  await groundPlane(grp, 'deadgrass', 300, 8);
   const trees = { TwistedTree_1: [], DeadTree_1: [], DeadTree_2: [] };
   along(8.5 / dens(), (z, l) => { for (const s of [-1, 1]) { trees[pick(['DeadTree_1', 'DeadTree_2', 'DeadTree_1'])].push({ x: s * rand(HALF + 3, HALF + 11), z: z + rand(-2, 2), ry: rand(0, TAU), s: rand(.7, 1.1) }); if (Math.random() < .35) trees.TwistedTree_1.push({ x: s * rand(HALF + 12, 30), z, ry: rand(0, TAU), s: rand(.6, .9) }); } });
   for (const k in trees) place(grp, M[k], trees[k], { tint: k === 'TwistedTree_1' ? '#8a7a8a' : '#9a8f86', lod: { dist: 60, shape: 'cone', color: '#2a2226', w: .35, h: .9 } });
@@ -1221,19 +1503,19 @@ async function buildDeadWoods(grp) {
 }
 
 const THEMES = {
-  // exposure darkens the whole frame on LOW graphics too; grade: [shadow tint, saturation, vignette] (HIGH graphics only); storm: lightning flashes per second (0 = none)
-  bridge:    { name: 'HIGHWAY BRIDGE', sky: ['#121926', '#2b3546', '#5b5e66'], sunDir: [.45, .22, -1], fog: ['#3a4250', 32, 165], hemi: ['#93a3bf', '#2a2826', .62], sun: ['#ffc9a0', 2.1], env: .42, exposure: 0.8, road: 'asphalt', ground: '#3a3c40', grade: ['#c6d0e8', .84, .85], storm: .07, build: buildBridge },
-  downtown:  { name: 'DOWNTOWN', sky: ['#14181a', '#343a36', '#646656'], sunDir: [-.6, .3, -1], fog: ['#454a45', 22, 118], hemi: ['#a8b2a0', '#2c2a26', .62], sun: ['#ffd8a0', 1.9], env: .4, exposure: 0.88, road: 'asphalt', ground: '#3e3d3b', grade: ['#c8d6c2', .8, .88], storm: .05, build: buildDowntown },
-  forest:    { name: 'PINE FOREST', sky: ['#151d1a', '#36443e', '#6c7a72'], sunDir: [.6, .3, -1], fog: ['#4f5c55', 16, 100], hemi: ['#acbcaa', '#262c1e', .66], sun: ['#e6e2c8', 1.8], env: .4, exposure: 0.8, road: 'dirt', ground: '#2e3a22', grade: ['#c2d2c6', .8, .88], storm: 0, build: buildForest },
-  desert:    { name: 'DESERT HIGHWAY', sky: ['#1c1624', '#55363a', '#b06a48'], sunDir: [.35, .16, -1], fog: ['#6e5040', 36, 180], hemi: ['#dcbca4', '#4a3424', .64], sun: ['#ff9c62', 2.5], env: .45, exposure: 0.72, road: 'desert', ground: '#7a5c40', grade: ['#e0c6ba', .88, .82], storm: 0, build: buildDesert },
-  deadwoods: { name: 'DEAD WOODS', sky: ['#0d0c17', '#33223a', '#8e3e36'], sunDir: [.15, .1, -1], fog: ['#382c3a', 16, 100], hemi: ['#a08ab4', '#1e1816', .56], sun: ['#ff9868', 2.0], env: .38, exposure: 0.92, road: 'dirt', ground: '#2a241e', grade: ['#d0c2dc', .88, .9], storm: .04, build: buildDeadWoods }
+  // exposure darkens the whole frame; grade: [shadow tint, saturation, vignette], applied in the final pass; wet: how much rain water stands on the road; storm: lightning flashes per second (0 = none)
+  bridge:    { name: 'HIGHWAY BRIDGE', sky: ['#121926', '#2b3546', '#5b5e66'], sunDir: [.45, .22, -1], fog: ['#3a4250', 32, 165], hemi: ['#93a3bf', '#2a2826', .62], sun: ['#ffc9a0', 2.1], env: .42, exposure: 0.8, road: 'asphalt', ground: '#3a3c40', grade: ['#dde4f2', .96, .6], storm: .07, wet: .6, build: buildBridge },
+  downtown:  { name: 'DOWNTOWN', sky: ['#14181a', '#343a36', '#646656'], sunDir: [-.6, .3, -1], fog: ['#454a45', 22, 118], hemi: ['#a8b2a0', '#2c2a26', .62], sun: ['#ffd8a0', 1.9], env: .4, exposure: 0.88, road: 'asphalt', ground: '#3e3d3b', grade: ['#e0e8da', .94, .62], storm: .05, wet: 0.55, build: buildDowntown },
+  forest:    { name: 'PINE FOREST', sky: ['#151d1a', '#36443e', '#6c7a72'], sunDir: [.6, .3, -1], fog: ['#4f5c55', 16, 100], hemi: ['#acbcaa', '#262c1e', .66], sun: ['#e6e2c8', 1.8], env: .4, exposure: 0.8, road: 'dirt', ground: '#2e3a22', grade: ['#dae6dc', .95, .62], storm: 0, wet: 0.45, build: buildForest },
+  desert:    { name: 'DESERT HIGHWAY', sky: ['#1c1624', '#55363a', '#b06a48'], sunDir: [.35, .16, -1], fog: ['#6e5040', 36, 180], hemi: ['#dcbca4', '#4a3424', .64], sun: ['#ff9c62', 2.5], env: .45, exposure: 0.72, road: 'desert', ground: '#7a5c40', grade: ['#f0dfd4', 1.0, .58], storm: 0, wet: 0, build: buildDesert },
+  deadwoods: { name: 'DEAD WOODS', sky: ['#0d0c17', '#33223a', '#8e3e36'], sunDir: [.15, .1, -1], fog: ['#382c3a', 16, 100], hemi: ['#a08ab4', '#1e1816', .56], sun: ['#ff9868', 2.0], env: .38, exposure: 0.92, road: 'dirt', ground: '#2a241e', grade: ['#e2d8ea', .98, .65], storm: .04, wet: 0.4, build: buildDeadWoods }
 };
 const THEME_ORDER = ['bridge', 'downtown', 'forest', 'desert', 'deadwoods'];
 let themeId = null;
 ensureTheme('bridge'); // builds the shared road too
 const themeFor = L => save.map && save.map !== 'auto' && THEMES[save.map] ? save.map : THEME_ORDER[(L - 1) % THEME_ORDER.length];
 async function ensureTheme(id) {
-  if (!themeGroups[id]) { const grp = new THREE.Group(); grp.visible = false; scene.add(grp); themeGroups[id] = (async () => { await THEMES[id].build(grp); return grp; })(); }
+  if (!themeGroups[id]) { const grp = new THREE.Group(); grp.visible = false; scene.add(grp); themeGroups[id] = (async () => { await THEMES[id].build(grp); await roadMat(THEMES[id].road); return grp; })(); }
   return themeGroups[id];
 }
 async function setTheme(id, L = 1) {
@@ -1247,7 +1529,7 @@ function applyTheme(grp) {
   grp.visible = true;
   hemi.color.set(T.hemi[0]); hemi.groundColor.set(T.hemi[1]);
   sun.color.set(T.sun[0]); G && (G.sunDir = T.sunDir); sky.material.uniforms.sun.value.set(...T.sunDir).normalize();
-  roadMesh.material.map = ROADS[T.road]; ROADS[T.road].repeat.set(1, ROAD_LEN / 12); roadMesh.material.needsUpdate = true;
+  roadMesh.material = roadMats[T.road];
   envGround.color.set(T.ground);
   GRADE.tint.value.set(T.grade[0]); GRADE.sat.value = T.grade[1]; storm.t = 0; storm.wait = rand(4, 9);
 }
@@ -1266,10 +1548,12 @@ function moodFor(L) { // six moods against five maps, so each map comes round in
   const m = MOODS[(L - 1) % MOODS.length], ramp = L > 1 ? clamp(.1 + (L - 2) * .02, 0, .3) : 0;
   return { name: m.name, dark: clamp(m.dark + ramp, 0, .95), fog: clamp(m.fog + ramp * .5, 0, 1) };
 }
-const mood = { dark: 0, fog: 0, hemi: 1, name: '' }, _black = new THREE.Color(0, 0, 0);
+const mood = { dark: 0, fog: 0, hemi: 1, name: '' }, _black = new THREE.Color(0, 0, 0), _white = new THREE.Color(1, 1, 1), _c2 = new THREE.Color(), _c3 = new THREE.Color();
 function applyMood(T, M) {
   const d = M.dark, f = M.fog; Object.assign(mood, M);
   const u = sky.material.uniforms; u.top.value.set(T.sky[0]).lerp(_black, .7 * d); u.mid.value.set(T.sky[1]).lerp(_black, .66 * d); u.hor.value.set(T.sky[2]).lerp(_black, .6 * d); u.glow.value = 1 - .85 * d;
+  u.dark.value = d; u.cloud.value = clamp((T.storm ? .62 : .42) + .25 * f, 0, .9);
+  FOGH.x = .12 + .4 * f; FOGH.y = .55; FOGH.z = .09; // low ground fog, thicker in the foggy moods
   scene.fog.color.set(T.fog[0]).lerp(_black, .62 * d);
   const near = T.fog[1] * (1 - .8 * f), far = Math.max(48, T.fog[2] * (1 - .62 * f));
   scene.fog.near = near; scene.fog.far = far;
@@ -1279,13 +1563,21 @@ function applyMood(T, M) {
   sun.intensity = T.sun[1] * (1 - .78 * d);
   envGround.color.set(T.ground).lerp(_black, .5 * d); rebuildEnv(T.env * (1 - .6 * d));
   renderer.toneMappingExposure = T.exposure * (1 - .22 * d);
-  GRADE.vig.value = T.grade[2] + .4 * d;
-  torch.intensity = 150 * clamp((d - .2) / .7, 0, 1); squadFill.intensity = 14 * clamp(d / .6, 0, 1);
+  GRADE.vig.value = T.grade[2] + .25 * d;
+  WET.value = clamp((T.wet || 0) * (.65 + .5 * f), 0, 1); RAIN.value = T.storm ? 1 : 0; // wet roads; rain where storms roll in
+  rain.visible = !!T.storm && !reduceMotion; rain.material.uniforms.amt.value = T.storm ? .55 + .45 * clamp(d + f * .5, 0, 1) : 0;
+  { const P = MOTES[themeId] || MOTES.bridge, U = motes.material.uniforms; U.col.value.set(P.col); U.size.value = P.size * (hiQ ? 1 : 1.3); U.n.value = P.n * (hiQ ? 1 : .5) * (P.glow > 1 ? .4 + .6 * d : 1);
+    U.rise.value = P.rise; U.drift.value = P.drift; U.tw.value = P.tw; U.glow.value = P.glow; }
+  torch.intensity = 130 * clamp((d - .2) / .7, 0, 1); squadFill.intensity = 14 * clamp(d / .6, 0, 1);
+  camFill.color.set(T.hemi[0]).lerp(_white, .5); camFill.intensity = .55 + .25 * d;
+  { const c = _c2.set(T.sky[1]).lerp(_c3.set(T.sky[2]), .5), l = Math.max(.03, c.r * .2126 + c.g * .7152 + c.b * .0722); RIM_COL.value.copy(c).multiplyScalar((.13 - .04 * d) / l); }
   mist.material.color.copy(scene.fog.color).multiplyScalar(1.6); mist.material.opacity = .1 + .38 * f; mist.visible = f > .05;
 }
 // squad flashlights: one wide beam ahead of the squad, so the road and the oncoming horde stay readable at night
 const torch = new THREE.SpotLight('#dfe8ff', 0, 40, .5, .7, 1.1); torch.position.set(0, -50, 0); scene.add(torch, torch.target);
 const squadFill = new THREE.PointLight('#cdd8f0', 0, 9, 1.3); scene.add(squadFill); // soft fill so the squad itself never goes to silhouette
+// soft light from just above the camera: the sun is usually ahead of the squad, so without it faces and backs sit in shadow
+const camFill = new THREE.DirectionalLight('#dfe6f2', .5); scene.add(camFill, camFill.target); const _cd = new THREE.Vector3();
 // low drifting ground mist: a scrolling cloud texture on a big sheet at knee height that follows the camera
 const mistTex = canvasTex(256, 256, (g, w, h) => {
   g.clearRect(0, 0, w, h);
@@ -1295,8 +1587,80 @@ const mistTex = canvasTex(256, 256, (g, w, h) => {
 mistTex.wrapS = mistTex.wrapT = THREE.RepeatWrapping; mistTex.repeat.set(3, 4);
 const mist = new THREE.Mesh(new THREE.PlaneGeometry(70, 90).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: mistTex, transparent: true, depthWrite: false, opacity: .2 }));
 mist.renderOrder = 2; scene.add(mist);
+
+// rain on stormy maps: streaks falling through a box that wraps around the camera (so they stay put in the world as it moves),
+// brighter where the squad's flashlight catches them
+const RAIN_N = 2400, rainGeo = new THREE.InstancedBufferGeometry();
+rainGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-.5, 0, 0, .5, 0, 0, .5, 1, 0, -.5, 1, 0]), 3)); rainGeo.setIndex([0, 1, 2, 0, 2, 3]);
+rainGeo.setAttribute('seed', new THREE.InstancedBufferAttribute(Float32Array.from({ length: RAIN_N * 4 }, Math.random), 4)); rainGeo.instanceCount = RAIN_N;
+const rain = new THREE.Mesh(rainGeo, new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false,
+  uniforms: { t: { value: 0 }, cam: { value: new THREE.Vector3() }, amt: { value: 0 }, lightPos: { value: new THREE.Vector3() }, lightAmt: { value: 0 }, col: { value: new THREE.Color('#9fb0c8') } },
+  vertexShader: `uniform float t, amt, lightAmt; uniform vec3 cam, lightPos; attribute vec4 seed; varying float vA, vU;
+    void main() {
+      vec3 box = vec3(26., 16., 34.), lo = cam - vec3(13., 14.5, 30.);
+      vec3 vel = vec3(-1.2, -(13. + seed.w * 5.), -.6);
+      vec3 p = lo + mod(seed.xyz * box + vel * t - lo, box);
+      vec3 p0 = (viewMatrix * vec4(p, 1.)).xyz, p1 = (viewMatrix * vec4(p - vel * .045, 1.)).xyz; // streak = motion blur of the drop
+      vec2 dir = normalize(p1.xy / -p1.z - p0.xy / -p0.z + 1e-6), side = vec2(-dir.y, dir.x);
+      vec3 q = mix(p0, p1, position.y); q.xy += side * position.x * .02 * -q.z / 6.;
+      gl_Position = projectionMatrix * vec4(q, 1.);
+      float near = smoothstep(.6, 2.5, -p0.z) * (1. - smoothstep(18., 30., -p0.z));
+      vA = amt * near * (.4 + 1.6 * lightAmt * exp(-dot(p - lightPos, p - lightPos) / 90.)) * step(seed.w, amt); vU = position.x;
+    }`,
+  fragmentShader: `uniform vec3 col; varying float vA, vU; void main() { gl_FragColor = vec4(col * vA * (1. - 4. * vU * vU), 1.); }`
+}));
+rain.frustumCulled = false; rain.renderOrder = 3; rain.visible = false; scene.add(rain);
+// drifting motes per map: ash on the bridge, embers downtown and in the dead woods, fireflies in the forest, dust in the desert
+const MOTE_N = 700, moteGeo = new THREE.BufferGeometry();
+moteGeo.setAttribute('position', new THREE.BufferAttribute(Float32Array.from({ length: MOTE_N * 3 }, Math.random), 3));
+moteGeo.setAttribute('seed', new THREE.BufferAttribute(Float32Array.from({ length: MOTE_N }, Math.random), 1));
+const MOTES = { // color, size, count share, rise speed, drift, twinkle, glow (additive brightness)
+  bridge: { col: '#b8c0cc', size: .05, n: .35, rise: -.15, drift: .5, tw: .2, glow: .5 },
+  downtown: { col: '#ff8a3a', size: .06, n: .45, rise: .5, drift: .7, tw: .8, glow: 2.2 },
+  forest: { col: '#d8ff7a', size: .07, n: .3, rise: .05, drift: .35, tw: 1, glow: 2.6 },
+  desert: { col: '#e2bd8a', size: .045, n: 1, rise: .05, drift: 2.2, tw: .1, glow: .55 },
+  deadwoods: { col: '#ff6a2a', size: .07, n: .6, rise: .7, drift: .5, tw: .7, glow: 2.6 }
+};
+const motes = new THREE.Points(moteGeo, new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false,
+  uniforms: { t: { value: 0 }, cam: { value: new THREE.Vector3() }, col: { value: new THREE.Color() }, size: { value: .05 }, n: { value: 0 }, rise: { value: 0 }, drift: { value: 0 }, tw: { value: 0 }, glow: { value: 1 }, px: { value: 400 }, map: { value: glowTex } },
+  vertexShader: `uniform float t, size, n, rise, drift, tw, glow, px; uniform vec3 cam; attribute float seed; varying float vA;
+    void main() {
+      vec3 box = vec3(30., 9., 44.), lo = cam - vec3(15., cam.y + .3, 38.);
+      vec3 p = position * box + vec3(sin(t * .3 + seed * 40.) * .8 + t * drift, t * rise + sin(t * .7 + seed * 17.) * .3, cos(t * .25 + seed * 23.) * .8);
+      p = lo + mod(p - lo, box);
+      vec4 mv = viewMatrix * vec4(p, 1.); gl_Position = projectionMatrix * mv;
+      gl_PointSize = size * px / -mv.z;
+      float blink = mix(1., max(0., sin(t * (1.5 + seed * 2.) + seed * 60.)), tw);
+      vA = glow * blink * step(seed, n) * smoothstep(1., 3., -mv.z) * (1. - smoothstep(25., 42., -mv.z));
+    }`,
+  fragmentShader: `uniform vec3 col; uniform sampler2D map; varying float vA; void main() { gl_FragColor = vec4(col * vA * texture2D(map, gl_PointCoord).r, 1.); }`
+}));
+motes.frustumCulled = false; motes.renderOrder = 3; scene.add(motes);
+// the flashlight's beam made visible in the fog: a soft cone, brighter near the lamp
+const torchBeamGeo = new THREE.CylinderGeometry(.05, 1, 1, 32, 8, true).translate(0, -.5, 0).rotateX(-Math.PI / 2); // tip at the origin, opening toward +z (lookAt aims it)
+const torchBeam = new THREE.Mesh(torchBeamGeo, new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, toneMapped: false,
+  uniforms: { amt: { value: 0 }, col: { value: new THREE.Color('#cfdcff') }, t: { value: 0 } },
+  vertexShader: `varying float vL; varying vec3 vN, vV; varying vec3 vW;
+    void main() { vL = position.z; vec4 w = modelMatrix * vec4(position, 1.); vW = w.xyz; vec4 mv = viewMatrix * w; vV = normalize(-mv.xyz);
+      vN = normalize(normalMatrix * normal); gl_Position = projectionMatrix * mv; }`,
+  fragmentShader: `uniform float amt, t; uniform vec3 col; varying float vL; varying vec3 vN, vV, vW;
+    void main() { float edge = pow(abs(dot(normalize(vN), normalize(vV))), 1.6); // fade at the silhouette, like a lit volume
+      float dust = .75 + .25 * sin(vW.x * 2.1 + t * .7) * sin(vW.z * 1.3 - t * .5);
+      gl_FragColor = vec4(col * amt * edge * dust * (1. - vL) * (1. - vL) * smoothstep(0., .06, vL) * .5, 1.); }`
+}));
+torchBeam.frustumCulled = false; torchBeam.renderOrder = 4; torchBeam.visible = false; scene.add(torchBeam);
 function updateAtmos(dt, t) {
+  UTIME.value = t; sky.material.uniforms.time.value = t;
+  const ru = rain.material.uniforms, mu = motes.material.uniforms; ru.t.value = mu.t.value = torchBeam.material.uniforms.t.value = t;
+  ru.cam.value.copy(camera.position); mu.cam.value.copy(camera.position); mu.px.value = renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+  camera.getWorldDirection(_cd); camFill.position.copy(camera.position).addScaledVector(_cd, -4).y += 6; camFill.target.position.copy(camera.position).addScaledVector(_cd, 20);
   if (!G) return;
+  ru.lightPos.value.copy(torch.position).lerp(torch.target.position, .3); ru.lightAmt.value = torch.intensity / 150;
+  torchBeam.visible = torch.intensity > 1 && !(G.fps && G.fps.on); torchBeam.material.uniforms.amt.value = torch.intensity / 150 * (.35 + .65 * mood.fog);
+  if (torchBeam.visible) { torchBeam.position.copy(torch.position); torchBeam.lookAt(torch.target.position); torchBeam.scale.set(8, 8, 24); }
   mist.position.set(0, .55, G.sz - 30); mistTex.offset.set(t * .006, -G.sz / 90 * 4 + t * .01);
   torch.position.set(G.sx, 3.2, G.sz - 1.5); squadFill.position.set(G.sx, 3.4, G.sz + 2.2); torch.target.position.set(G.sx * .6, 0, G.sz - 20);
 }
@@ -2015,7 +2379,7 @@ function fpsView(dt, e) {
 // draw the gun and a tracer once while the menu loads, so their shaders are ready before the first boss (otherwise the switch stutters)
 function fpsPrewarm() {
   fpsGun.g.visible = true; fpsGun.g.position.set(0, 0, -.5); fpsTrMesh.count = 1; fpsTrMesh.setMatrixAt(0, _m.makeTranslation(camera.position.x, camera.position.y, camera.position.z - 3));
-  try { if (hiQ && composer) composer.render(); else renderer.render(scene, camera); } catch (e) {}
+  try { renderFrame(); } catch (e) {}
   fpsGun.g.visible = false; fpsTrMesh.count = 0;
 }
 // first person: show the boss's skin. The fog is pushed back past the boss, the rim light is turned down, and the squad's
@@ -2414,7 +2778,7 @@ function sync(dt) {
       tilt += (z.lunge > 0 ? .1 * Math.sin(Math.PI * (1 - z.lunge)) : 0) - (z.recoil || 0) * .09; // leans into strikes, rocks back when hit
       yaw = Math.atan2(-(G.sx - z.x), -Math.max(.5, G.sz - z.z)); z.yaw = yaw; // keeps its eyes on you
     }
-    pushInst(z.model || ZOMB, z.x, (z.lift || 0) - sink, zz, yaw, sc, clip, at, z.shirt, 0, flash, z.mask || 0, tilt);
+    pushInst(z.model || ZOMB, z.x, (z.lift || 0) - sink, zz, yaw, sc, clip, at, z.shirt, 0, flash, z.mask || 0, tilt, (z.dying ? .85 : clamp(1 - z.hp / z.maxHp, 0, 1)) + ((z.model || ZOMB).woundZ === z ? 10 : 0));
     if (!z.dying || z.dying < 1.3) pushBlob(z.x, z.z, sc * .55);
   }
   flushInst(ZOMB); for (const R of ZALL) flushInst(R);
@@ -2534,13 +2898,13 @@ function refreshLoadout() {
   $('mapBtn').textContent = 'MAP: ' + (save.map === 'auto' ? 'AUTO' : THEMES[save.map].name.split(' ').pop());
 }
 function refreshSound() { const t = 'SOUND: ' + (soundOn ? 'ON' : 'OFF'); $('soundBtn').textContent = t; $('soundBtn2').textContent = t;
-  const g = 'GRAPHICS: ' + (hiQ ? 'HIGH' : 'LOW'); $('gfxBtn').textContent = g; $('gfxBtn2').textContent = g;
+  const g = 'GRAPHICS: ' + gfx.toUpperCase(); $('gfxBtn').textContent = g; $('gfxBtn2').textContent = g;
   const b = 'GORE: ' + (goreOn ? 'ON' : 'OFF'); $('goreBtn').textContent = b; $('goreBtn2').textContent = b;
   const f = 'BOSS: ' + (fpsOn ? '1ST PERSON' : 'CLASSIC'); $('fpsBtn').textContent = f; $('fpsBtn2').textContent = f; }
-function setQuality(high) { // LOW: no bloom/post, no character shadows, smaller shadow map, lower resolution
-  hiQ = high; store.set('gfx', high ? 'high' : 'low');
-  if (SOLD) SOLD.mesh.castShadow = high; if (HEROM) HEROM.mesh.castShadow = high; if (ZOMB) ZOMB.mesh.castShadow = high; for (const R of ZALL) R.mesh.castShadow = high; for (const m of gibMeshes) if (m) m.mesh.castShadow = high;
-  sun.shadow.mapSize.set(high ? 2048 : 1024, high ? 2048 : 1024); if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
+function setQuality(q) { // see GFX_TIERS; LOW also drops character shadows and uses a smaller shadow map
+  gfx = q; hiQ = q !== 'low'; store.set('gfx', q);
+  if (SOLD) SOLD.mesh.castShadow = hiQ; if (HEROM) HEROM.mesh.castShadow = hiQ; if (ZOMB) ZOMB.mesh.castShadow = hiQ; for (const R of ZALL) R.mesh.castShadow = hiQ; for (const m of gibMeshes) if (m) m.mesh.castShadow = hiQ;
+  const sm = hiQ ? 2048 : 1024; sun.shadow.mapSize.set(sm, sm); if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
   resize(); refreshSound();
 }
 function goMenu() {
@@ -2601,7 +2965,7 @@ $('resetBtn').onclick = () => {
   save.level = 1; save.coins = 0; save.up = { dmg: 0, rate: 0, men: 0, coin: 0 }; save.weapon = 'rifle'; save.fails = {}; store.set('fails', {}); persist();
   ensureAudio(); sfx.good(); goMenu(); banner('NEW GAME', 'BACK TO LEVEL 1', 1400);
 };
-$('gfxBtn').onclick = $('gfxBtn2').onclick = () => { store.set('gfxChosen', true); setQuality(!hiQ); };
+$('gfxBtn').onclick = $('gfxBtn2').onclick = () => { store.set('gfxChosen', true); setQuality(GFX_TIERS[(GFX_TIERS.indexOf(gfx) + 1) % GFX_TIERS.length]); };
 document.addEventListener('visibilitychange', () => { if (document.hidden && state === 'play') togglePause(); if (!document.hidden && state === 'play') requestWake(); });
 
 /* ================= loop ================= */
@@ -2610,10 +2974,15 @@ const perf = { t: 0, frames: 0, done: false };
 function frame(now) {
   if (window.__freeze) { requestAnimationFrame(frame); return; } // test hook: hold the current frame
   const rawDt = (now - last) / 1000, dt = Math.min(.05, rawDt); last = now;
-  // first time playing on this device: drop to LOW graphics if HIGH can't hold ~40 fps
-  if (state === 'play' && hiQ && !perf.done && !store.get('gfxChosen', false) && rawDt < .5) {
+  // first time playing on this device: step HIGH -> MEDIUM below 45 fps, then MEDIUM -> LOW below 35 fps (unless graphics were picked by hand)
+  if (state === 'play' && gfx !== 'low' && !perf.done && !gfxArg && !store.get('gfxChosen', false) && rawDt < .5) {
     perf.t += rawDt; perf.frames++;
-    if (perf.t > 4) { perf.done = true; if (perf.frames / perf.t < 40) { setQuality(false); banner('GRAPHICS: LOW', 'SWITCHED FOR SMOOTHER PLAY', 1800); } }
+    if (perf.t > 4) {
+      const fps = perf.frames / perf.t; perf.t = 0; perf.frames = 0;
+      if (gfx === 'high' && fps < 45) { setQuality('medium'); banner('GRAPHICS: MEDIUM', 'SWITCHED FOR SMOOTHER PLAY', 1800); }
+      else if (gfx === 'medium' && fps < 35) { setQuality('low'); banner('GRAPHICS: LOW', 'SWITCHED FOR SMOOTHER PLAY', 1800); perf.done = true; }
+      else perf.done = true;
+    }
   }
   requestAnimationFrame(frame);
   try {
@@ -2621,10 +2990,10 @@ function frame(now) {
     else if (G && state !== 'paused') { for (const z of G.zombies) z.phase += dt * 3; for (const s of G.soldiers) s.pop = Math.min(1, s.pop + dt * 3); }
     sync(state === 'paused' ? 0 : dt);
     updateHud(); updateFloats(state === 'paused' ? 0 : dt);
-    if (hiQ && composer) composer.render(); else renderer.render(scene, camera);
+    renderFrame();
   } catch (err) { frameErrors++; if (frameErrors < 5) console.error(err); }
 }
-buildComposer(); resize();
+buildPost(); resize();
 $('playBtn').disabled = true; $('playBtn').textContent = 'LOADING…';
 // textured zombies listed in models/zombies.json, e.g. {"walker": ["wwzombie"], "brute": ["mutant"], "boss": ["mutant"], "gibs": "wwzombie"}
 async function loadTroops() { // realistic squad + hero from models/troops.json (tools/bake/bake_mixamo.py), else the classic soldier
@@ -2657,7 +3026,7 @@ async function readyBoss(L) {
   await bossCompile; // never free a model while its shaders are still being built
   dropBossModels([cur, next]);
   const R = await loadBossModel(cur);
-  if (R && R.lazy && !R.warm) { R.warm = true; R.mesh.count = 0; bossCompile = renderer.compileAsync(scene, camera).catch(() => {}); await bossCompile; } // build its shaders now, not mid-fight
+  if (R && R.lazy && !R.warm) { R.warm = true; R.mesh.count = 0; renderer.setRenderTarget(post.rt); bossCompile = renderer.compileAsync(scene, camera).catch(() => {}); renderer.setRenderTarget(null); await bossCompile; } // build its shaders now, not mid-fight
   loadBossModel(next); // fetch the next level's boss in the background
 }
 async function loadZombieModels() {
@@ -2674,7 +3043,7 @@ async function loadZombieModels() {
 Promise.all([document.fonts ? document.fonts.load('40px Bungee').catch(() => {}) : 0, loadTroops(), loadVAT('zombie', MAXZ, { gore: true }), fetch('models/zombie-gibs.json').then(r => r.json()), loadZombieModels()]).then(([, s, z, gibData, texGibs]) => {
   SOLD = s; ZOMB = z; buildGibs(texGibs || gibData); $('playBtn').disabled = false; if (BOSS_TEST) save.level = BOSS_TEST; goMenu(); fpsPrewarm(); requestAnimationFrame(frame);
 }).catch(err => { $('playBtn').textContent = 'COULD NOT LOAD MODELS'; console.error(err); });
-window.__dt = { info: (hide) => { const g = []; if (hide) scene.traverse(o => { if (o.isInstancedMesh && o !== SOLD.mesh && !(HEROM && o === HEROM.mesh) && o !== ZOMB.mesh && !ZALL.some(R => R.mesh === o) && o.visible) { o.visible = false; g.push(o); } }); renderer.render(scene, camera); const r = { tris: renderer.info.render.triangles, calls: renderer.info.render.calls }; g.forEach(o => o.visible = true); return r; }, mk: (x, z, t = 'walker') => makeZombie(x, z, t), audio: () => ({ ctx: AC && AC.state, loaded: Object.keys(buffers).length, voices }), camera, THREE, get G() { return G; }, get state() { return state; }, start: startLevel, power: t => applyPower(t), setTheme, step(dt) { if (state === 'play') update(dt); }, tick(dt, draw) { if (state === 'play') update(dt); sync(state === 'paused' ? 0 : dt); updateHud(); updateFloats(state === 'paused' ? 0 : dt); if (draw) (hiQ && composer ? composer.render() : renderer.render(scene, camera)); }, get gore() { return goreOn; }, sync, render: () => (hiQ && composer ? composer.render() : renderer.render(scene, camera)), save, persist, programs: () => renderer.info.programs.length, headAt: z => partWorld(z, 1, new THREE.Vector3()), torsoAt: z => partWorld(z, 0, new THREE.Vector3()) };
+window.__dt = { post, renderer, scene, setQuality, WET, RAIN, addWound, get gfx() { return gfx; }, info: (hide) => { const g = []; if (hide) scene.traverse(o => { if (o.isInstancedMesh && o !== SOLD.mesh && !(HEROM && o === HEROM.mesh) && o !== ZOMB.mesh && !ZALL.some(R => R.mesh === o) && o.visible) { o.visible = false; g.push(o); } }); renderer.setRenderTarget(post.rt); renderer.render(scene, camera); renderer.setRenderTarget(null); const r = { tris: renderer.info.render.triangles, calls: renderer.info.render.calls }; g.forEach(o => o.visible = true); return r; }, mk: (x, z, t = 'walker') => makeZombie(x, z, t), audio: () => ({ ctx: AC && AC.state, loaded: Object.keys(buffers).length, voices }), camera, THREE, get G() { return G; }, get state() { return state; }, start: startLevel, power: t => applyPower(t), setTheme, step(dt) { if (state === 'play') update(dt); }, tick(dt, draw) { if (state === 'play') update(dt); sync(state === 'paused' ? 0 : dt); updateHud(); updateFloats(state === 'paused' ? 0 : dt); if (draw) renderFrame(); }, get gore() { return goreOn; }, sync, render: () => renderFrame(), save, persist, programs: () => renderer.info.programs.length, headAt: z => partWorld(z, 1, new THREE.Vector3()), torsoAt: z => partWorld(z, 0, new THREE.Vector3()) };
 </script>
 </body>
 </html>
