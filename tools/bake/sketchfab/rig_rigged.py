@@ -8,6 +8,25 @@ if arm.animation_data: arm.animation_data.action = None
 for act in list(bpy.data.actions): bpy.data.actions.remove(act)
 for pb in arm.pose.bones: pb.location = (0, 0, 0); pb.rotation_quaternion = (1, 0, 0, 0); pb.rotation_euler = (0, 0, 0); pb.scale = (1, 1, 1)
 meshes = [o for o in bpy.data.objects if o.type == 'MESH' and o.find_armature() == arm]
+# optional: drop meshes by material name (e.g. alpha-card hair the game's opaque shader can't draw)
+DROP = [x for x in os.environ.get('DROP', '').split(',') if x]
+for o in list(meshes):
+    if any(d in m.name for m in o.data.materials if m for d in DROP): meshes.remove(o); bpy.data.objects.remove(o, do_unlink=True)
+# optional: Source-engine (ValveBiped) skeleton -> Mixamo names, so the clips and the gore body parts find their bones
+if os.environ.get('RENAME') == 'valve':
+    VB = {'COG': 'Hips', 'Spine1': 'Spine', 'Spine2': 'Spine1', 'Spine4': 'Spine2', 'Neck': 'Neck', 'Head1': 'Head'}
+    for s_, m_ in (('L', 'Left'), ('R', 'Right')):
+        VB.update({f'{s_}_Clavicle': m_ + 'Shoulder', f'{s_}_UpperArm': m_ + 'Arm', f'{s_}_Forearm': m_ + 'ForeArm', f'{s_}_Hand': m_ + 'Hand',
+                   f'{s_}_Thigh': m_ + 'UpLeg', f'{s_}_Calf': m_ + 'Leg', f'{s_}_Foot': m_ + 'Foot', f'{s_}_Toe0': m_ + 'ToeBase'})
+    for b in arm.data.bones:
+        if b.name.endswith('_scaleCompensation'): continue
+        k = re.sub(r'_\d+$', '', b.name).replace('ValveBiped_Bip01_', '')
+        if k in VB:
+            old = b.name; b.name = 'mixamorig:' + VB[k]
+            for o in meshes:
+                g = o.vertex_groups.get(old)
+                if g: g.name = b.name
+    print('renamed', sorted(b.name for b in arm.data.bones if b.name.startswith('mixamorig')))
 # stand the bind pose up (Sketchfab's bind pose can lie along +Y) and put its feet on the ground
 top = arm
 while top.parent: top = top.parent
@@ -18,11 +37,17 @@ dg = bpy.context.evaluated_depsgraph_get(); zs = []
 for o in meshes:
     e = o.evaluated_get(dg); m = e.to_mesh(); zs += [(e.matrix_world @ v.co).z for v in m.vertices]; e.to_mesh_clear()
 top.location.z -= min(zs); bpy.context.view_layer.update(); print('height', max(zs) - min(zs))
+ys = []; xs = []
+for o in meshes:
+    e = o.evaluated_get(dg); m = e.to_mesh(); W = [e.matrix_world @ v.co for v in m.vertices]; ys += [w.y for w in W]; xs += [w.x for w in W]; e.to_mesh_clear()
+print('bbox x', min(xs), max(xs), 'y', min(ys), max(ys))
+if os.environ.get('CHECK'): sys.exit()
 for o in list(bpy.data.objects):
     if o.type == 'MESH' and o not in meshes: bpy.data.objects.remove(o, do_unlink=True)
 tris = sum(sum(len(p.vertices) - 2 for p in o.data.polygons) for o in meshes)
 for o in meshes:
     bpy.context.view_layer.objects.active = o; bpy.ops.object.select_all(action='DESELECT'); o.select_set(True)
+    if o.data.shape_keys: o.shape_key_clear()  # facial shape keys block decimation
     if tris > TRIS:
         d = o.modifiers.new('dec', 'DECIMATE'); d.ratio = TRIS / tris; d.use_collapse_triangulate = True
         bpy.ops.object.modifier_move_to_index(modifier='dec', index=0); bpy.ops.object.modifier_apply(modifier='dec')

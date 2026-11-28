@@ -19,3 +19,8 @@ but not as stand-alone files).
 
 The Mixamo clips are the project's uploaded zombie animation FBX files (paths in `rig.py`).
 `tools/bake/melee.py` builds the melee weapons (axe, cleaver, nail bat) that `MELEE` puts in a boss's right hand.
+
+The Mutagen (a Source-engine ValveBiped skeleton, lying down in its bind pose, with alpha-card hair) is rigged with
+`RENAME=valve DROP=hair python rig_rigged.py -- william_birkin_stage.glb mutagen.blend 26000 -90` and baked with
+`TEX=1024` (its nine materials go into a 3x3 atlas, 3072 px square).
+Bosses are baked with `TEX=2048 NTEX=1024` and 13k-26k triangles; the big zombies with the defaults (1k, 5k triangles).

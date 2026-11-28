@@ -60,16 +60,22 @@ Power-ups come two ways. **Crates** stand on the road: shoot one until its numbe
 
 ### Bosses
 
-Each level ends with one of six bosses, in turn. Later levels make every boss bigger and tougher.
+Each level ends with one of twelve bosses, in turn. Several of them carry weapons or move differently: the Butcher has a knife, the Flayed a meat cleaver, the Axeman a fire axe, the Crawler scuttles on four long limbs, and the Mutagen swings a giant clawed arm. Later levels make every boss bigger and tougher.
 
 | Boss | Skin | Size | Health | Speed | Resists |
 | --- | --- | --- | --- | --- | --- |
 | Rotfather | Mutant | normal | normal | slow | nothing |
 | Mother Maggot | Zombie Girl | small | low | very fast | nothing |
+| The Butcher | Horror Maniac (knife) | normal | normal | fast | nothing |
 | The Warden | Prisoner | normal | normal | fast | bullets a little |
+| The Crawler | Scary Monster, on all fours | small | low | very fast | weak to fire |
 | The Pumpkin King | Pumpkin Hulk | big | high | slow | fire (60%) |
+| The Flayed | Undead (cleaver) | normal | normal | fast | weak to fire |
 | Iron Grunt | WW zombie | big | high | normal | bullets (40%) and fire; rockets hit it harder |
+| The Axeman | Zombie (fire axe) | big | high | normal | bullets a little |
 | Gutmouth | Ch10 | huge | very high | very slow | bullets a little |
+| The Abomination | Mutant Monster | huge | very high | very slow | bullets a little |
+| The Mutagen | mutated scientist, giant claw arm | huge | very high | slow | bullets a little; rockets hit harder |
 
 ### Fair power-ups
 
@@ -123,6 +129,10 @@ Re-bake after changing models or clips:
 python3 -m http.server 8766   # from the repository root
 node tools/bake/run-bake.js   # writes www/models/*.bin and *.json
 ```
+
+### Sketchfab bosses and big zombies
+
+The Butcher, Crawler, Flayed, Axeman, Abomination and Mutagen bosses and the Punk, Clerk and Lurker brutes are Sketchfab models (Sketchfab Standard license), rigged in Blender and baked with `tools/bake/sketchfab` (see its README). Boss models download only when their level starts. Artists are credited on the **CREDITS** screen in the menu: loundzzz, L. (A2555), Regulator, David Glynch, raydev, PJ8080! and Vasian-Digital3D.
 
 ## Sound, effects and lighting
 

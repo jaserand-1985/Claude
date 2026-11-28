@@ -48,7 +48,7 @@ if tris > MAX_TRIS:
 # body-part groups for dismemberment: 0 torso, 1 head, 2/3 arms, 4/5 legs
 def group_of(bone):
     k = bone_key(bone)
-    if k.startswith(('Head', 'Neck')) or 'Eye' in k: return 1
+    if k.startswith(('Head', 'Neck')) or k.endswith('Eye'): return 1
     side = 2 if k.startswith('Left') else 3 if k.startswith('Right') else 0
     if side and any(s in k for s in ('Shoulder', 'Arm', 'Hand')): return side
     if side and any(s in k for s in ('UpLeg', 'Leg', 'Foot', 'Toe')): return side + 2
@@ -117,8 +117,11 @@ for m in mats:
     im = color_image(m)
     key = im.name if im else None
     if key not in tile_of: tile_of[key] = len(tiles); tiles.append(im)
-if GUNS: tiles.append('white')  # a plain white tile, so the guns' vertex colours show through the texture
+WHITE_PATCH = bool(MELEE)  # melee weapons: paint a small white corner of tile 0 instead of adding a whole white tile
+if GUNS and not WHITE_PATCH: tiles.append('white')  # a plain white tile, so the guns' vertex colours show through the texture
 NT = len(tiles)
+GC = NT if NT <= 4 else math.ceil(math.sqrt(NT)); GR = math.ceil(NT / GC)  # tiles in a row, or a square grid when there are many
+tcol = lambda t: t % GC; trow = lambda t: t // GC  # rows counted from the bottom (Blender pixel order)
 
 topo = []  # per object: list of (vertex index, loop index)
 uvs, idx, grp = [], [], []
@@ -141,7 +144,7 @@ for o in meshes:
             k = (vi, round(u, 5), round(v, 5), g)
             if k not in key:
                 key[k] = len(uvs); lst.append((vi, li)); u = (u % 1.0) if (u < 0 or u > 1) else u; v = (v % 1.0) if (v < 0 or v > 1) else v
-                uvs.append(((u + tile) / NT, 1 - v)); grp.append(g)
+                uvs.append(((u + tcol(tile)) / GC, 1 - (v + trow(tile)) / GR)); grp.append(g)
             idx.append(key[k])
     topo.append(lst); e.to_mesh_clear()
 V = len(uvs)
@@ -152,7 +155,7 @@ for gp in guns:  # unindexed triangles, one game vertex each
     n = len(gp['pos']) // 3
     gun_local.append(np.array(gp['pos'], np.float32).reshape(-1, 3)); gun_nlocal.append(np.array(gp['nor'], np.float32).reshape(-1, 3))
     for i in range(n):
-        idx.append(len(uvs)); uvs.append(((NT - 1 + .5) / NT, .5)); grp.append(0); parts.append(gp['part']); cols.append(tuple(gp['color']))
+        idx.append(len(uvs)); uvs.append((4 / (TEX * GC), 4 / (TEX * GR)) if WHITE_PATCH else ((tcol(NT - 1) + .5) / GC, 1 - (trow(NT - 1) + .5) / GR)); grp.append(0); parts.append(gp['part']); cols.append(tuple(gp['color']))
 VB = V; V = len(uvs)
 if guns: gun_local = np.concatenate(gun_local) * GUN_SCALE; gun_nlocal = np.concatenate(gun_nlocal)
 
@@ -231,13 +234,15 @@ for i in range(F):
 
 # ---- texture atlas
 import bpy_extras  # noqa: F401
-atlas = np.zeros((TEX, TEX * NT, 4), np.float32); atlas[..., 3] = 1
+atlas = np.zeros((TEX * GR, TEX * GC, 4), np.float32); atlas[..., 3] = 1
+cell = lambda t, n=TEX: (slice(trow(t) * n, (trow(t) + 1) * n), slice(tcol(t) * n, (tcol(t) + 1) * n))
 for t, im in enumerate(tiles):
-    if isinstance(im, str): atlas[:, t * TEX:(t + 1) * TEX, :3] = 1; continue
-    if im is None: atlas[:, t * TEX:(t + 1) * TEX, :3] = .5; continue
+    if isinstance(im, str): atlas[cell(t)][..., :3] = 1; continue
+    if im is None: atlas[cell(t)][..., :3] = .5; continue
     im2 = im.copy(); im2.scale(TEX, TEX)
     px = np.array(im2.pixels[:], np.float32).reshape(TEX, TEX, 4)
-    atlas[:, t * TEX:(t + 1) * TEX] = px; bpy.data.images.remove(im2)
+    atlas[cell(t)] = px; bpy.data.images.remove(im2)
+if WHITE_PATCH: atlas[-8:, :8, :3] = 1  # top-left 8x8 px of the first tile (image row 0 = last array row)
 from PIL import Image as PILImage
 FMT = os.environ.get('FMT', 'jpg')  # jpg, or webp (smaller at the same quality)
 def save_atlas(arr, path, q):
@@ -251,15 +256,16 @@ for m in mats:
     if ni is not None: ntile[tile_of.get(ci.name if ci else None, 0)] = ni
 NORMALS = bool(ntile) and os.environ.get('NORMALS', '1') == '1'
 if NORMALS:
-    natlas = np.zeros((TEX, TEX * NT, 4), np.float32); natlas[..., 0] = natlas[..., 1] = .5; natlas[..., 2] = 1
+    NTEX = int(os.environ.get('NTEX', TEX))  # normal maps can be smaller than the colour atlas
+    natlas = np.zeros((NTEX * GR, NTEX * GC, 4), np.float32); natlas[..., 0] = natlas[..., 1] = .5; natlas[..., 2] = 1
     for t, im in ntile.items():
-        im.colorspace_settings.name = 'Non-Color'; im2 = im.copy(); im2.scale(TEX, TEX)
-        natlas[:, t * TEX:(t + 1) * TEX] = np.array(im2.pixels[:], np.float32).reshape(TEX, TEX, 4); bpy.data.images.remove(im2)
+        im.colorspace_settings.name = 'Non-Color'; im2 = im.copy(); im2.scale(NTEX, NTEX)
+        natlas[cell(t, NTEX)] = np.array(im2.pixels[:], np.float32).reshape(NTEX, NTEX, 4); bpy.data.images.remove(im2)
     save_atlas(natlas, OUT + '-n.' + FMT, 90)
 atlas_flip = atlas[::-1]  # row 0 = top, to sample with (u, 1 - v) after our flip
 
 def sample(uv):
-    x = np.clip((uv[:, 0] * TEX * NT).astype(int), 0, TEX * NT - 1); y = np.clip((uv[:, 1] * TEX).astype(int), 0, TEX - 1)
+    x = np.clip((uv[:, 0] * TEX * GC).astype(int), 0, TEX * GC - 1); y = np.clip((uv[:, 1] * TEX * GR).astype(int), 0, TEX * GR - 1)
     c = atlas_flip[y, x, :3]; c = np.where(c <= .0031308, c * 12.92, 1.055 * np.power(np.clip(c, 0, 1), 1 / 2.4) - .055)  # linear -> sRGB bytes
     return (np.clip(c, 0, 1) * 255).astype(np.uint8)
 

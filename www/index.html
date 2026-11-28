@@ -136,7 +136,7 @@ h2{font-family:var(--display);font-size:clamp(30px,9vw,40px);margin:0;color:var(
     <h2>CREDITS</h2>
     <div class="credlist">
       <p><b>Boss and zombie models</b> from Sketchfab, used under the Sketchfab Standard license:</p>
-      <p>The Butcher: "Horror Maniac with Knife" by loundzzz<br>The Crawler: "Scary Monster" by L. (A2555)<br>The Flayed: "Undead" by Regulator<br>The Axeman: "Zombie" by David Glynch<br>The Abomination: "Mutant Monster" by raydev<br>Punk and Clerk zombies: "spiky haired male zombie" and "male office worker zombie character" by PJ8080!<br>Lurker zombie: "Zombie" by L. (A2555)</p>
+      <p>The Butcher: "Horror Maniac with Knife" by loundzzz<br>The Crawler: "Scary Monster" by L. (A2555)<br>The Flayed: "Undead" by Regulator<br>The Axeman: "Zombie" by David Glynch<br>The Abomination: "Mutant Monster" by raydev<br>Punk and Clerk zombies: "spiky haired male zombie" and "male office worker zombie character" by PJ8080!<br>Lurker zombie: "Zombie" by L. (A2555)<br>The Mutagen: "William Birkin Stage" by Vasian-Digital3D (fan model)</p>
       <p>Squad and other zombies: Mixamo characters and animations, and Quaternius (CC0). Scenery: Quaternius (CC0). Sounds: CC0 recordings, see audio/CREDITS.md.</p>
     </div>
     <button class="btn" id="creditsClose">BACK</button>
@@ -1434,16 +1434,17 @@ let state = 'menu', G = null;
 // res: share of damage shrugged off per cause (negative = weak spot); stomp: soldiers knocked out per stomp, relative
 const BOSSES = [
   { name: 'ROTFATHER', model: 'mutant', size: 1, hp: 1, spd: 1.25, stomp: 1, res: {}, tag: '' },
-  { name: 'THE BUTCHER', model: 'butcher', size: .95, hp: .95, spd: 1.9, stomp: 1, res: {}, tag: 'FAST, CARRIES A BLADE' },
   { name: 'MOTHER MAGGOT', model: 'zombiegirl', size: .78, hp: .75, spd: 2.3, stomp: .7, res: {}, tag: 'SMALL BUT FAST' },
-  { name: 'THE CRAWLER', model: 'crawler', size: .85, hp: .9, spd: 2.2, stomp: .9, res: { fire: -.3 }, tag: 'CRAWLS FAST, HATES FIRE' },
+  { name: 'THE BUTCHER', model: 'butcher', size: .95, hp: .85, spd: 1.8, stomp: .9, res: {}, tag: 'FAST, CARRIES A BLADE' },
   { name: 'THE WARDEN', model: 'prisoner', size: .9, hp: .95, spd: 1.8, stomp: .9, res: { bullet: .2 }, tag: 'FAST, TOUGH SKIN' },
-  { name: 'THE FLAYED', model: 'skinless', size: 1.05, hp: 1.1, spd: 1.5, stomp: 1.1, res: { fire: -.3 }, tag: 'CLEAVER, NO SKIN: BURNS EASILY' },
+  { name: 'THE CRAWLER', model: 'crawler', size: .85, hp: .9, spd: 2.2, stomp: .9, res: { fire: -.3 }, tag: 'CRAWLS FAST, HATES FIRE' },
   { name: 'THE PUMPKIN KING', model: 'pumpkinhulk', size: 1.2, hp: 1.3, spd: 1.1, stomp: 1.2, res: { fire: .6 }, tag: 'FIREPROOF' },
-  { name: 'THE AXEMAN', model: 'ghoul', size: 1.1, hp: 1.15, spd: 1.4, stomp: 1.15, res: { bullet: .15 }, tag: 'SWINGS A FIRE AXE' },
+  { name: 'THE FLAYED', model: 'skinless', size: 1.05, hp: 1.1, spd: 1.5, stomp: 1.1, res: { fire: -.3 }, tag: 'CLEAVER, NO SKIN: BURNS EASILY' },
   { name: 'IRON GRUNT', model: 'wwzombie', size: 1.1, hp: 1.15, spd: 1.3, stomp: 1, res: { bullet: .4, fire: .2, blast: -.3 }, tag: 'ARMORED: ROCKETS HIT HARD' },
-  { name: 'THE ABOMINATION', model: 'abomination', size: 1.35, hp: 1.5, spd: .9, stomp: 1.4, res: { bullet: .2 }, tag: 'HUGE, THICK HIDE' },
-  { name: 'GUTMOUTH', model: 'ch10', size: 1.3, hp: 1.45, spd: .95, stomp: 1.3, res: { bullet: .15 }, tag: 'HUGE' }
+  { name: 'THE AXEMAN', model: 'ghoul', size: 1.1, hp: 1.15, spd: 1.4, stomp: 1.15, res: { bullet: .15 }, tag: 'SWINGS A FIRE AXE' },
+  { name: 'GUTMOUTH', model: 'ch10', size: 1.3, hp: 1.45, spd: .95, stomp: 1.3, res: { bullet: .15 }, tag: 'HUGE' },
+  { name: 'THE ABOMINATION', model: 'abomination', size: 1.35, hp: 1.35, spd: .9, stomp: 1.35, res: { bullet: .15 }, tag: 'HUGE, THICK HIDE' },
+  { name: 'THE MUTAGEN', model: 'mutagen', size: 1.25, hp: 1.4, spd: 1.1, stomp: 1.35, res: { bullet: .1, blast: -.2 }, tag: 'GIANT CLAW: ROCKETS HIT HARD' }
 ];
 const bossFor = L => BOSSES[(L - 1) % BOSSES.length];
 const stats = () => ({ dmg: Math.pow(1.2, save.up.dmg), rate: 3.4 * Math.pow(1.1, save.up.rate), men: 3 + save.up.men, coin: 1 + .25 * save.up.coin });
@@ -2499,7 +2500,8 @@ function goMenu() {
 }
 async function startLevel() {
   ensureAudio();
-  if (ZLIST && (ZLIST.bosses || []).includes(bossFor(save.level).model) && !ZBYNAME[bossFor(save.level).model]) { const b = $('playBtn'), t = b.textContent; b.textContent = 'LOADING BOSS…'; b.disabled = true; try { await readyBoss(save.level); } finally { b.textContent = t; b.disabled = false; } } else readyBoss(save.level);
+  { const b = $('playBtn'), t = b.textContent, slow = ZLIST && (ZLIST.bosses || []).includes(bossFor(save.level).model) && !ZBYNAME[bossFor(save.level).model]; // boss model not downloaded yet
+    if (slow) { b.textContent = 'LOADING BOSS…'; b.disabled = true; } try { await readyBoss(save.level); } finally { if (slow) { b.textContent = t; b.disabled = false; } } }
   if (themeId !== themeFor(save.level)) { const b = $('playBtn'), t = b.textContent; b.textContent = 'LOADING MAP…'; b.disabled = true; try { await setTheme(themeFor(save.level), save.level); } finally { b.textContent = t; b.disabled = false; } } ['menu', 'pause', 'win', 'lose'].forEach(i => show(i, false)); show('hud', true); show('hint', true); $('hint').style.opacity = 1;
   $('bossbar').hidden = true; fpsReset(); for (const k in chipEls) chipEls[k].hidden = true;
   newGame(save.level); $('hudLv').textContent = 'LEVEL ' + save.level; lastCoins = -1; updateWeaponChip();
@@ -2597,11 +2599,13 @@ function dropBossModels(keep) { // free lazy boss models that aren't this level'
     delete ZBYNAME[n]; delete lazyLoads[n]; ZALL = ZALL.filter(x => x !== R);
   }
 }
+let bossCompile = Promise.resolve();
 async function readyBoss(L) {
   const cur = bossFor(L).model, next = bossFor(L + 1).model;
+  await bossCompile; // never free a model while its shaders are still being built
   dropBossModels([cur, next]);
   const R = await loadBossModel(cur);
-  if (R && R.lazy && !R.warm) { R.warm = true; try { R.mesh.count = 0; await renderer.compileAsync(scene, camera); } catch (e) {} } // build its shaders now, not mid-fight
+  if (R && R.lazy && !R.warm) { R.warm = true; R.mesh.count = 0; bossCompile = renderer.compileAsync(scene, camera).catch(() => {}); await bossCompile; } // build its shaders now, not mid-fight
   loadBossModel(next); // fetch the next level's boss in the background
 }
 async function loadZombieModels() {
