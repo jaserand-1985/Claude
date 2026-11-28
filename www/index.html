@@ -1564,7 +1564,7 @@ function applyMood(T, M) {
   scene.fog.near = near; scene.fog.far = far;
   for (const P of [fireFx, smokeFx, flameFx]) { P.mesh.material.uniforms.fogNear.value = near; P.mesh.material.uniforms.fogFar.value = far; }
   { const su = shaftMat.uniforms; su.fogNear.value = near; su.fogFar.value = far; su.col.value.set(T.sun[0]).lerp(_c2.set('#8fa6ff'), d); su.amt.value = (.22 + .12 * f) * (1 - .55 * d); // skylight shafts in the factory
-    ARENA_U.aWet.value = T.wet ? .55 + .45 * T.wet : .12; }
+    ARENA_U.aWet.value = T.wet ? .55 + .45 * T.wet : .12; if (arena.card) arena.card.material.color.copy(scene.fog.color).multiplyScalar(.18); }
   camera.far = far + 8; camera.updateProjectionMatrix(); sky.scale.setScalar(camera.far * .9 / 500);
   mood.hemi = T.hemi[2] * (1 - .5 * d); hemi.intensity = mood.hemi;
   sun.intensity = T.sun[1] * (1 - .78 * d);
@@ -1668,12 +1668,12 @@ renderer.localClippingEnabled = true;
 const ARENA_S = 3, ARENA_GAP = 22;
 const ARENA_CLIP = new THREE.Plane(new THREE.Vector3(0, 0, 1), 1e5);
 const ARENA_U = { aLamp: { value: [0, 1, 2, 3, 4].map(() => new THREE.Vector3(0, -99, 0)) }, aLampC: { value: [0, 1, 2, 3, 4].map(() => new THREE.Vector3()) }, aTube: { value: new THREE.Vector4(1, 1, 1, 1) }, aWet: { value: .5 } };
-// four rows of ceiling tubes and a red emergency light at the back, in model units
-const ARENA_LAMPS = [[.14, 4.2, -3.48], [.14, 4.2, -10.45], [.14, 4.2, -17.42], [.14, 4.2, -24.46], [0, 2.3, -29.2]];
+// four rows of ceiling tubes and a red emergency light on the left wall, in model units
+const ARENA_LAMPS = [[.14, 4.2, -3.48], [.14, 4.2, -10.45], [.14, 4.2, -17.42], [.14, 4.2, -24.46], [-3.6, 2.4, -12.5]];
 const ARENA_SURF = { // roughness, metalness per material (the model's own values made the concrete glossy)
   'Material.002': [.86, 0], 'Material.001': [.9, 0], 'Material.007': [.88, 0], 'Material.003': [.5, .7], 'Material.006': [.5, .6],
   'Material.005': [.55, .5], 'Material.004': [.6, .3], 'Material.008': [.55, .35], 'Material.009': [.55, .35], 'Material.010': [.55, .35] };
-const arena = { root: null, z: 1e5, hidden: [], pier: null, load: null, meshes: [], shafts: null, ready: null };
+const arena = { root: null, z: 1e5, hidden: [], pier: null, load: null, meshes: [], shafts: null, ready: null, card: null };
 const ARENA_GLSL = `varying vec3 vLP, vWP; uniform vec3 aLamp[5], aLampC[5]; uniform vec4 aTube; uniform float aWet;
 float ah(vec2 p) { vec3 q = fract(vec3(p.xyx) * .1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
 float an(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f);
@@ -1723,7 +1723,8 @@ function arenaMat(m) {
         #endif
         #if defined( RE_IndirectSpecular )
         radiance *= aAmbK;
-        #endif`);
+        #endif`)
+      .replace('#include <fog_fragment>', THREE.ShaderChunk.fog_fragment.replace('mix( gl_FragColor.rgb, fogColor, fogFactor )', 'mix( gl_FragColor.rgb, fogColor * (1. - .82 * aIn), fogFactor * (1. - .3 * aIn) )')); // no daylight in the hall's own haze
   };
   m.customProgramCacheKey = () => 'arena' + (tube ? 'T' : '');
 }
@@ -1756,6 +1757,10 @@ function loadArena() {
     for (let i = 0; i < 7; i++) { const top = new THREE.Vector3(rand(-8, 8), 13.6, -14 - i * 10.5 + rand(-3, 3)), w = rand(1.1, 2.2);
       sh.setMatrixAt(i, _m.compose(top.addScaledVector(dir, len / 2), q, _sv.set(w, len, w * rand(.8, 1.6)))); }
     sh.frustumCulled = false; sh.renderOrder = 4; root.add(sh); arena.shafts = sh;
+    // the camera's far plane sits just past the fog, so the back of the hall gets cut off and the sky would show through the door:
+    // a dark card across the hall, kept just inside the far plane, stands in for the unlit haze back there
+    const card = new THREE.Mesh(new THREE.PlaneGeometry(25.8, 13.8).translate(0, 6.9, 0), new THREE.MeshBasicMaterial({ color: scene.fog.color.clone().multiplyScalar(.18), fog: false }));
+    root.add(card); arena.card = card;
     scene.add(root); arena.root = root; root.visible = false; res(root);
   }, undefined, () => res(null)));
 }
@@ -1803,6 +1808,7 @@ function updateArena(t) {
   U.aLampC.value[4].set(ARENA_RED.r, ARENA_RED.g, ARENA_RED.b).multiplyScalar(26 * (.35 + .65 * Math.pow(.5 + .5 * Math.sin(t * 2.4), 3)));
   U.aTube.value.set(rows[0], rows[1], rows[2], rows[3]);
   shaftMat.uniforms.cam.value.copy(camera.position);
+  arena.card.position.z = Math.min(-2, Math.max(-90, camera.position.z - (camera.far - 6) - arena.z));
 }
 function updateAtmos(dt, t) {
   UTIME.value = t; sky.material.uniforms.time.value = t;
