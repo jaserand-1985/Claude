@@ -51,11 +51,11 @@ const fs = require('fs'); fs.mkdirSync(OUT, { recursive: true });
           if (near.length >= 8) { const m = near.reduce((a, z) => a + z.x, 0) / near.length; out.lineness.push(Math.sqrt(near.reduce((a, z) => a + (z.x - m) ** 2, 0) / near.length)); }
           if (steps % 300 === 0 && shots.length < 3 && near.length >= 8) { D.render(); shots.push(1); }
         }
-        if (g.phase === 'boss' && !out.bossT) out.bossT = steps * dt;
+        if (g.phase === 'boss' && !out.bossT) { out.bossT = steps * dt; out.bossWeapon = g.weapon; out.bossSquad = g.soldiers.length; out.bossMaxHp = g.boss && g.boss.maxHp; out.fps = !!(g.fps && g.fps.on); }
       }
       const g = G();
       out.t = +(steps * dt).toFixed(1); out.state = D.state; out.phase = g.phase; out.endSoldiers = g.soldiers.length; out.kills = g.kills; out.lost = g.lost || 0; out.weapon = g.weapon; out.help = g.help; out.mega = (g.megaN || 0) + '/' + g.crates.filter(c => c.mega).length; out.boss = g.boss && g.boss.bt && g.boss.bt.name; out.bossHpLeft = g.boss ? Math.round(g.boss.hp) : null;
-      out.progress = Math.round(-g.sz / g.len * 100); out.len = g.len; out.hordes = g.hordes.length;
+      out.drops = g.crates.filter(c => c.z < -g.len + 80).map(c => c.type + (c.dead ? '(taken)' : '')).join(' '); out.progress = Math.round(-g.sz / g.len * 100); out.len = g.len; out.hordes = g.hordes.length;
       if (D.state === 'play') out.bad.push('level did not finish in 240 s (phase ' + g.phase + ')');
       const ln = out.lineness; out.spreadX = ln.length ? +(ln.reduce((a, b) => a + b, 0) / ln.length).toFixed(2) : null; delete out.lineness;
       return out;

@@ -2168,7 +2168,7 @@ function update(dt) {
     $('bossName').textContent = bossFor(G.L).name;
   }
 
-  for (const k in G.pw) if (G.pw[k] > 0) { G.pw[k] = Math.max(0, G.pw[k] - dt); if (G.pw[k] === 0 && k !== 'double') { sfx.expire(); if (k === 'w_rocket' && G.weapon === 'rocket') { setWeapon(G.baseWeapon || 'rifle'); floatText('ROCKETS OUT', G.sx, 3.4, G.sz - 1, POWER.w_rocket.col, 24); } } }
+  for (const k in G.pw) if (G.pw[k] > 0 && !(k === 'w_rocket' && G.bossSpawned)) { G.pw[k] = Math.max(0, G.pw[k] - dt); if (G.pw[k] === 0 && k !== 'double') { sfx.expire(); if (k === 'w_rocket' && G.weapon === 'rocket') { setWeapon(G.baseWeapon || 'rifle'); floatText('ROCKETS OUT', G.sx, 3.4, G.sz - 1, POWER.w_rocket.col, 24); } } }
   if (G.pw.magnet > 0 && (G.magT -= dt) <= 0) { // the magnet pulls crates ahead open, one at a time
     const c = G.crates.find(c => !c.dead && G.sz - c.z > -1 && G.sz - c.z < 25);
     if (c) { G.magT = .3; const col = new THREE.Color(POWER.magnet.col); for (let i = 0; i <= 14; i++) { const f = i / 14; sparks.add(G.sx + (c.x - G.sx) * f, 1 + Math.sin(f * Math.PI) * 1.6, G.sz + (c.z - G.sz) * f, rand(-.4, .4), 1, rand(-.4, .4), .35, col); } crateBreak(c); }
@@ -2355,7 +2355,7 @@ function update(dt) {
   // crates
   for (const c of G.crates) {
     if (c.dead) continue;
-    if (c.mega && !c.sized && c.z > G.sz - 50) { c.sized = true; c.hp = c.maxHp = Math.round(clamp(G.soldiers.length, 6, MAXS) * G.st.rate * 3.2); // about three seconds of the whole squad's fire c.dirty = 1;
+    if (c.mega && !c.sized && c.z > G.sz - 50) { c.sized = true; c.hp = c.maxHp = Math.round(clamp(G.soldiers.length, 6, MAXS) * G.st.rate * 3.2); c.dirty = 1; drawCrate(c); // about three seconds of the whole squad's fire
       if (!save.seen.includes('mega_hint')) { save.seen.push('mega_hint'); store.set('seen', save.seen); banner('MEGA CACHE', 'STEER OVER AND SHOOT IT · HOLD TO KEEP FIRING', 2600, POWER.mega.col); } else floatText('MEGA CACHE!', c.x, 3.2, c.z, POWER.mega.col, 26); }
     if (!c.smart && c.z > G.sz - 45) { c.smart = true; const t = smartCrate(c); if (t && t !== c.type) { c.type = t; c.hp = c.maxHp = Math.round(c.hp * .6); c.x += (clamp(G.sx, -3, 3) - c.x) * .5; c.mesh.position.x = c.halo.position.x = c.x; c.halo.material.color.set(POWER[t].col); drawCrate(c); } } // a crate the squad needs is easier to break and sits nearer its lane
     c.flash = Math.max(0, c.flash - dt);
