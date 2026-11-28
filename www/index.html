@@ -2021,7 +2021,7 @@ function drawBossLimbs(dt) {
     }
     const sink = Math.max(0, L.t - 7) * .4;
     if (!L.R.mesh.parent || L.R.n >= L.R.max) continue;
-    pushInst(L.R, 0, 0, 0, 0, 1, L.clip, L.at, L.tint, 0, 0, 63 & ~(1 << L.g));
+    pushInst(L.R, 0, 0, 0, 0, 1, L.clip, L.at, L.tint, 0, 0, 63 & ~(1 << L.g), 0, 1 + (L.R.woundZ ? 10 : 0)); // fully bloodied, and keeps any bullet holes it had
     _lm.compose(_ls.set(L.x, L.y - sink, L.z), L.q, _v.set(L.sc, L.sc, L.sc)).multiply(_lp.makeTranslation(-L.piv.x, -L.piv.y, -L.piv.z));
     L.R.mesh.setMatrixAt(L.R.n - 1, _lm);
   }
