@@ -23,6 +23,6 @@ The Mixamo clips are the project's uploaded zombie animation FBX files (paths in
 The Mutagen (a Source-engine ValveBiped skeleton, lying down in its bind pose, with alpha-card hair) is rigged with
 `RENAME=valve DROP=hair python rig_rigged.py -- william_birkin_stage.glb mutagen.blend 26000 -90` and baked with
 `TEX=1024` (its nine materials go into a 3x3 atlas, 3072 px square).
-Bosses are baked with `TEX=2048 NTEX=1024` and 13k-26k triangles; the big zombies with the defaults (1k, 5k triangles).
+Bosses are baked near their source triangle counts (19k-50k) with `TEX=2048 NTEX=2048 Q=94 FPS=12` (the Butcher at `TEX=4096`, the Mutagen at `TEX=1365`, a 4096 px 3x3 atlas), re-rigged with `tris` raised in the configs; the big zombies use the defaults (1k, 5k triangles).
 
 After baking a boss over 14 MB, run `python3 tools/bake/split_bin.py www/models/<name>` so the bin ships in pieces (the game joins them).

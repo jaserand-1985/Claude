@@ -14,7 +14,7 @@ import numpy as np
 
 argv = sys.argv[sys.argv.index('--') + 1:]
 SRC, OUT, SPECS = argv[0], argv[1], argv[2:]
-FPS = 15
+FPS = int(os.environ.get('FPS', 15))  # bosses use 12: big meshes, and the game blends between frames
 MAX_TRIS = int(os.environ.get('MAX_TRIS', 6000))
 TEX = int(os.environ.get('TEX', 1024))
 GUNS = os.environ.get('GUNS')  # guns.json (tools/bake/guns.json): put the game's weapons in the character's hands
