@@ -17,7 +17,7 @@ const fs = require('fs'); fs.mkdirSync(OUT, { recursive: true });
   const report = [];
   for (const L of (process.env.LEVELS ? process.env.LEVELS.split(',').map(Number) : Array.from({ length: L1 - L0 + 1 }, (_, i) => +L0 + i))) {
     const nErr = errors.length;
-    const r = await page.evaluate(async ([L, skill, process_env_CASUAL, fresh, wobble, rifleOnly]) => {
+    const r = await page.evaluate(async ([L, skill, process_env_CASUAL, fresh, wobble, rifleOnly, holdMega]) => {
       const D = window.__dt; D.save.level = L; if (fresh) { D.save.fails = {}; localStorage.removeItem('deadtide2.fails'); } const u = process_env_CASUAL ? 0 : Math.floor((L - 1) * 1.2); D.save.up = { dmg: Math.ceil(u * .4), rate: Math.floor(u * .35), men: Math.floor(u * .25), coin: 0 }; D.save.weapon = 'rifle'; // roughly what a player can afford by level L
       await D.start();
       const G = () => D.G, out = { L, theme: null, maxZ: 0, minSoldiers: 999, maxSoldiers: 0, bad: [], lineness: [], gatesTaken: [], powers: 0, t: 0 };
@@ -35,6 +35,7 @@ const fs = require('fs'); fs.mkdirSync(OUT, { recursive: true });
           g._wob = (g._wob || 0) + dt; const F = g.fps, k = .12;
           F.yaw += (Math.atan2(p.x - e.x, dz) + Math.sin(g._wob * 2.3) * .07 - F.yaw) * k; F.pitch += (Math.atan2(p.y - e.y, Math.hypot(dz, p.x - e.x)) + Math.sin(g._wob * 1.7) * .06 - F.pitch) * k;
         }
+        if (holdMega) { const m = g.crates.find(c => c.mega && !c.dead && g.sz - c.z > 2 && g.sz - c.z < (g.weapon === 'flamer' ? 9 : 24)); g.hold = !!m && g.phase === 'run'; if (m && !gate) g.tx = m.x; }
         try { D.step(dt); } catch (e) { out.bad.push('update threw: ' + e.message + ' @' + (e.stack || '').split('\n')[1]); break; }
         steps++;
         if (steps % 15 === 0) {
@@ -53,12 +54,12 @@ const fs = require('fs'); fs.mkdirSync(OUT, { recursive: true });
         if (g.phase === 'boss' && !out.bossT) out.bossT = steps * dt;
       }
       const g = G();
-      out.t = +(steps * dt).toFixed(1); out.state = D.state; out.phase = g.phase; out.endSoldiers = g.soldiers.length; out.kills = g.kills; out.lost = g.lost || 0; out.weapon = g.weapon; out.help = g.help; out.boss = g.boss && g.boss.bt && g.boss.bt.name; out.bossHpLeft = g.boss ? Math.round(g.boss.hp) : null;
+      out.t = +(steps * dt).toFixed(1); out.state = D.state; out.phase = g.phase; out.endSoldiers = g.soldiers.length; out.kills = g.kills; out.lost = g.lost || 0; out.weapon = g.weapon; out.help = g.help; out.mega = (g.megaN || 0) + '/' + g.crates.filter(c => c.mega).length; out.boss = g.boss && g.boss.bt && g.boss.bt.name; out.bossHpLeft = g.boss ? Math.round(g.boss.hp) : null;
       out.progress = Math.round(-g.sz / g.len * 100); out.len = g.len; out.hordes = g.hordes.length;
       if (D.state === 'play') out.bad.push('level did not finish in 240 s (phase ' + g.phase + ')');
       const ln = out.lineness; out.spreadX = ln.length ? +(ln.reduce((a, b) => a + b, 0) / ln.length).toFixed(2) : null; delete out.lineness;
       return out;
-    }, [L, +(process.env.SKILL || 1), !!process.env.CASUAL, !!process.env.FRESH, !!process.env.WOBBLE, !!process.env.RIFLE]);
+    }, [L, +(process.env.SKILL || 1), !!process.env.CASUAL, !!process.env.FRESH, !!process.env.WOBBLE, !!process.env.RIFLE, !!process.env.HOLDMEGA]);
     // grab a frame of a horde coming in
     r.errors = errors.slice(nErr);
     report.push(r); console.log(JSON.stringify(r));
