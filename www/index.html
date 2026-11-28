@@ -488,6 +488,7 @@ const ONE = new THREE.Vector3(1, 1, 1), Y_AXIS = new THREE.Vector3(0, 1, 0);
 const std2 = (c, o = {}) => new THREE.MeshStandardMaterial(Object.assign({ color: c, roughness: .75, flatShading: true }, o));
 const box = (w, h, d, tx = 0, ty = 0, tz = 0) => new THREE.BoxGeometry(w, h, d).translate(tx, ty, tz);
 const flat = std2;
+const RIM_AMT = { value: 1 }; // the cool rim light on characters; turned down in first person, where it washed the bosses out
 async function loadVAT(name, max, opts = {}) {
   const meta = await (await fetch(`models/${name}.json`)).json();
   const buf = await (await fetch(`models/${name}.bin`)).arrayBuffer();
@@ -546,10 +547,11 @@ if (((int(iFx.z + .5) >> int(aGroup + .5)) & 1) == 1) transformed = vec3(0.); //
       .replace('#include <color_vertex>', `#include <color_vertex>
 vColor.rgb = mix(vColor.rgb, iTint, aTint);
 vColor.rgb = iFx.y >= 0. ? mix(vColor.rgb, vec3(1., .82, .78), iFx.y) : mix(vColor.rgb, vec3(.045, .038, .032), -iFx.y); // hit flash / charred`);
-    sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+    sh.uniforms.rimAmt = RIM_AMT;
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform float rimAmt;').replace('#include <color_fragment>', `#include <color_fragment>
       if (!gl_FrontFacing) diffuseColor.rgb = vec3(.3, .015, .012); // the inside of a body is red`).replace('#include <opaque_fragment>', `
       float rim = pow(1. - clamp(dot(normal, normalize(vViewPosition)), 0., 1.), 3.);
-      outgoingLight += vec3(.55, .68, .9) * rim * .55;   // cool sky rim light separates characters from the road
+      outgoingLight += vec3(.55, .68, .9) * rim * .55 * rimAmt;   // cool sky rim light separates characters from the road
       #include <opaque_fragment>`);
   };
   // the shaders inline this model's texture layout, so models must not share a compiled program
@@ -1959,7 +1961,27 @@ function fpsPrewarm() {
   try { if (hiQ && composer) composer.render(); else renderer.render(scene, camera); } catch (e) {}
   fpsGun.g.visible = false; fpsTrMesh.count = 0;
 }
-function fpsReset() { fpsGun.g.visible = false; fpsTr.length = 0; fpsTrMesh.count = 0; $('xhair').classList.remove('on'); $('fpsHint').classList.remove('on'); }
+// first person: show the boss's skin. The fog is pushed back past the boss, the rim light is turned down, and the squad's
+// fill light becomes a warm key light on the boss's front (reusing an existing light, so no shader recompiles)
+const fogBase = { near: 60, far: 240 }, fillBase = { i: 0, d: 9, c: new THREE.Color('#cdd8f0') }, _bl = new THREE.Vector3(), KEY_COL = new THREE.Color('#ffe2c4');
+function fpsBossLight(e) {
+  if (e <= 0) {
+    if (fogBase.lit) { fogBase.lit = false; scene.fog.near = fogBase.near; squadFill.intensity = fillBase.i; squadFill.distance = fillBase.d; squadFill.color.copy(fillBase.c); } // back to the map's own look
+    else { fogBase.near = scene.fog.near; fogBase.far = scene.fog.far; fillBase.i = squadFill.intensity; fillBase.d = squadFill.distance; fillBase.c.copy(squadFill.color); }
+    RIM_AMT.value = 1; return;
+  }
+  fogBase.lit = true;
+  scene.fog.near = fogBase.near + (Math.max(fogBase.near, Math.min(fogBase.far - 12, 34)) - fogBase.near) * e;
+  RIM_AMT.value = 1 - .8 * e;
+  const b = G.boss;
+  if (b && !(b.dying > 1.5)) {
+    const H = zScale(b); fpsEye(_bl); const dx = b.x - _bl.x, dz = b.z - _bl.z, d = Math.max(1, Math.hypot(dx, dz));
+    squadFill.position.set(b.x - dx / d * Math.min(6, d * .5) + 1.5, .7 * H, b.z - dz / d * Math.min(6, d * .5)); // between you and the boss, up at its chest
+    squadFill.distance = fillBase.d + (H * 2.2 - fillBase.d) * e; squadFill.intensity = fillBase.i + (125 * (.75 + .35 * mood.dark) - fillBase.i) * e; // light sits ~6 m off, so the same strength suits every boss size
+    squadFill.color.copy(fillBase.c).lerp(KEY_COL, e);
+  }
+}
+function fpsReset() { fogBase.lit = false; RIM_AMT.value = 1; squadFill.distance = 9; squadFill.color.set('#cdd8f0'); fpsGun.g.visible = false; fpsTr.length = 0; fpsTrMesh.count = 0; $('xhair').classList.remove('on'); $('fpsHint').classList.remove('on'); }
 
 /* ---------- input ---------- */
 const drag = { on: false, id: null, x0: 0, sx0: 0 }; const keys = {};
@@ -2276,7 +2298,7 @@ function sync(dt) {
   camera.lookAt(_fl);
   fpsView(dt, fe);
   sky.position.copy(camera.position); updateLod();
-  sun.position.set(G.sx + 9, 24, G.sz - 16); sun.target.position.set(G.sx, 0, G.sz - 5); updateAtmos(dt, t);
+  sun.position.set(G.sx + 9, 24, G.sz - 16); sun.target.position.set(G.sx, 0, G.sz - 5); updateAtmos(dt, t); fpsBossLight(fe);
 
   // soldiers (+ fallen soldiers playing their death animation)
   blobN = 0;
@@ -2309,7 +2331,7 @@ function sync(dt) {
     else if (z.hitT > 0) { clip = 'hit'; at = (.42 - z.hitT) * 1.5; }
     else if (z.attack) { clip = 'punch'; at = z.phase * (z.type === 'boss' ? .12 : .25); }
     else { clip = z.spd > 1.85 ? 'run' : 'walk'; at = z.phase / (clip === 'run' ? 6 : 4.5); }
-    const flash = z.char > 0 ? -z.char * .92 : z.flash > 0 ? (z.type === 'boss' ? .22 : .38) : frozen ? .3 : 0;
+    const flash = z.char > 0 ? -z.char * .92 : z.flash > 0 ? (z.type === 'boss' ? (G.fps && G.fps.k > .5 ? .06 : .22) : .38) : frozen ? .3 : 0;
     z._clip = clip; z._at = at;
     pushInst(z.model || ZOMB, z.x, (z.lift || 0) - sink, z.z, z.yaw, sc, clip, at, z.shirt, 0, flash, z.mask || 0, z.tilt || 0);
     if (!z.dying || z.dying < 1.3) pushBlob(z.x, z.z, sc * .55);
