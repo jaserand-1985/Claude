@@ -42,7 +42,7 @@ const LEVELS = (process.argv[3] || '1,2,3,4,5,6').split(',').map(Number);
         if (G.phase === 'boss') D.aimHead(.3);
         D.tick(1 / 30, false); t += 1 / 30; if (G.phase === 'done') ks.push(+F.k.toFixed(2));
       }
-      return { t: +t.toFixed(1), state: D.state, phase: G.phase, squad: G.soldiers.length, kEnd: F.k, ks: ks.filter((_, i) => i % 10 === 0) };
+      return { lost: G.boss && G.boss.lost, t: +t.toFixed(1), state: D.state, phase: G.phase, squad: G.soldiers.length, kEnd: F.k, ks: ks.filter((_, i) => i % 10 === 0) };
     });
     console.log(JSON.stringify({ ...f, end: e }));
     await page.screenshot({ path: `${OUT}/L${L}-end.png` });

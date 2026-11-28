@@ -1631,10 +1631,51 @@ function hurtZombie(z, dmg, cause = 'bullet', fx = z.x, fz = z.z + 5, hitY = 0) 
   if (z.type === 'boss') { // bosses rock back a little from every hit, and stagger from heavy ones (rockets, or a big chunk of health)
     z.hp0 = z.hp0 || z.hp + dmg; z.recoil = Math.min(1, (z.recoil || 0) + (cause === 'blast' ? .9 : .05));
     if (z.flinch <= 0 && !z.roarT && (cause === 'blast' || dmg > z.hp0 * .035)) { z.hitT = .6; z.flinch = 2.4; z.kb = cause === 'blast' ? 1.4 : .7; }
+    // limbs come off one at a time as its health drops (an armed boss keeps its weapon arm and one leg)
+    const lose = z.model && z.model.parts ? (MELEE_BOSSES.has(z.bt.model) ? [2, 4] : [2, 3, 4]) : [], n = z.lost || 0;
+    if (goreOn && n < lose.length && z.hp < z.hp0 * [.72, .48, .24][n]) { z.lost = n + 1; severBoss(z, lose[n], fx, fz); }
   }
   if (z.type !== 'boss' && z.flinch <= 0) { // stagger: play the hit reaction and get knocked back a step
     z.hitT = .42; z.flinch = z.type === 'brute' ? 1.1 : .55; z.kb = z.type === 'brute' ? .6 : 1.8;
   }
+}
+// boss limbs: the limb stays the boss's own mesh (same model, every other body part hidden), frozen in the pose it was shot off in, and tumbles away
+const MELEE_BOSSES = new Set(['skinless', 'ghoul', 'butcher']), bossLimbs = [];
+function severBoss(z, g, fx, fz) {
+  const p = partWorld(z, g, new THREE.Vector3()), R = z.model; if (!p) return;
+  const c = R.clips[z._clip], t = z._at; let q; // the part's centre in model space for that frame: the pivot it spins around
+  if (c.loop) q = (((t / c.dur) % 1) + 1) % 1 * c.frames; else q = clamp(t / c.dur, 0, 1) * (c.frames - 1);
+  const a = (c.start + Math.floor(q)) * 18 + g * 3, piv = new THREE.Vector3(R.parts[a], R.parts[a + 1], R.parts[a + 2]);
+  z.mask = (z.mask || 0) | (1 << g);
+  let dx = z.x - fx, dz = z.z - fz; const dl = Math.hypot(dx, dz) || 1; dx /= dl; dz /= dl;
+  bossLimbs.push({ R, g, clip: z._clip, at: z._at, sc: zScale(z), tint: z.shirt, piv, x: p.x, y: p.y, z: p.z,
+    vx: dx * rand(2, 4) + rand(-2, 2) + (g === 2 || g === 4 ? 1.5 : -1.5) * Math.cos(z.yaw), vy: rand(4, 6.5), vz: dz * rand(2, 4),
+    q: new THREE.Quaternion().setFromAxisAngle(Y_AXIS, z.yaw), w: new THREE.Vector3(rand(-1, 1), rand(-.4, .4), rand(-1, 1)).normalize().multiplyScalar(rand(4, 7)), t: 0, rest: false, bounces: 0 });
+  addSpray(z, g); bleed(p.x, p.y, p.z, 46, dx, .4, dz, 2.6, 6, 1.7); bloodMist(p.x, p.y, p.z);
+  addSplat(p.x + dx, p.z + dz, .5 * z.s / 4, pick(BLOOD), 1);
+  z.hitT = .6; z.flinch = 2.4; z.kb = 1.1; G.shake = Math.max(G.shake, .55); sfx.splat(z.x);
+  if (g >= 4) { z.limp = true; z.spd *= .62; }
+  floatText(g >= 4 ? 'LEG OFF!' : 'ARM OFF!', p.x, p.y + .6, p.z, '#ff5a4a', 26);
+}
+const _lq = new THREE.Quaternion(), _lw = new THREE.Quaternion(), _lm = new THREE.Matrix4(), _lp = new THREE.Matrix4(), _ls = new THREE.Vector3();
+function drawBossLimbs(dt) {
+  for (const L of bossLimbs) {
+    L.t += dt;
+    if (!L.rest) {
+      L.vy -= 17 * dt; L.x += L.vx * dt; L.y += L.vy * dt; L.z += L.vz * dt;
+      const sp = L.w.length(); if (sp > 1e-3) { _lw.setFromAxisAngle(_ls.copy(L.w).divideScalar(sp), sp * dt); L.q.premultiply(_lw); }
+      const floor = (L.g >= 4 ? .07 : .05) * L.sc;
+      if (L.y < floor) { L.y = floor; L.vy = -L.vy * .28; L.vx *= .55; L.vz *= .55; L.w.multiplyScalar(.45); L.bounces++;
+        if (L.bounces === 1) { bleed(L.x, floor, L.z, 14, 0, .6, 0, 1.6, 3); addSplat(L.x, L.z, .35 * L.sc / 4, pick(BLOOD), .8); }
+        if (Math.abs(L.vy) < 1.2) L.rest = true; }
+    }
+    const sink = Math.max(0, L.t - 7) * .4;
+    if (!L.R.mesh.parent || L.R.n >= L.R.max) continue;
+    pushInst(L.R, 0, 0, 0, 0, 1, L.clip, L.at, L.tint, 0, 0, 63 & ~(1 << L.g));
+    _lm.compose(_ls.set(L.x, L.y - sink, L.z), L.q, _v.set(L.sc, L.sc, L.sc)).multiply(_lp.makeTranslation(-L.piv.x, -L.piv.y, -L.piv.z));
+    L.R.mesh.setMatrixAt(L.R.n - 1, _lm);
+  }
+  for (let i = bossLimbs.length - 1; i >= 0; i--) if (bossLimbs[i].t > 8.5) bossLimbs.splice(i, 1);
 }
 function killZombie(z, cause = 'bullet', fx = z.x, fz = z.z + 5, hitY = 0) {
   z.dying = .0001; G.kills++; sfx.splat(z.x); z.mask = 0; z.hitT = 0; z.flash = 0;
@@ -1978,6 +2019,7 @@ function fpsShot(F, b) {
   if (hit) {
     t = hit.t; _fh.copy(_fd).multiplyScalar(t).add(_fe);
     hurtZombie(b, dmg * (hit.head ? FPS_HEAD : 1), 'bullet', _fe.x, _fe.z, _fh.y);
+    if (typeof addWound === 'function' && Math.random() < .35) addWound(b, _fh, .12); // bullet hole where the round landed (graphics thread's wound layer)
     F.hitT = .09; F.head = hit.head;
     if (Math.random() < .5) bleed(_fh.x, _fh.y, _fh.z + .1, hit.head ? 4 : 2, -_fd.x, .4, -_fd.z, 1.4, 3.2, hit.head ? 1.2 : .9);
     if (Math.random() < .35) sparks.add(_fh.x, _fh.y, _fh.z + .1, rand(-2, 2), rand(0, 3), rand(1, 3), .2, C.spark);
@@ -2208,6 +2250,7 @@ function update(dt) {
         if (b.z <= z.z + .3 * z.s && z0 >= z.z - .6 * z.s) {
           const hy = rand(.45, .8) * ZBASE * Math.min(z.s, 2.5);
           hurtZombie(z, b.dmg, 'bullet', b.x - b.vx * .1, b.z - b.vz * .1, hy); hit = true;
+          if (typeof addWound === 'function' && z.type !== 'walker' && !z.dying && (b.rocket || Math.random() < .25)) addWound(z, _v.set(b.x, rand(.3, .85) * zScale(z), z.z + .25 * z.s), b.rocket ? .35 : .12);
           if (b.rocket) { blast(b.x, z.z, 1.9, b.dmg * 2.5); if (Math.random() < .5 || b.hero) { explosion(b.x, .6, z.z, 1.6); sfx.rocketPop(b.x, z.z); } }
           if (!b.rocket && (z.type !== 'walker' || Math.random() < .7)) { const bl = Math.hypot(b.vx, b.vz); bleed(b.x, hy, z.z + .15, z.type === 'walker' ? 3 : 4, b.vx / bl, .25, b.vz / bl, 1.2, 3.2, .8); bleed(b.x, hy, z.z + .2, 1, -b.vx / bl, .4, -b.vz / bl, 1, 1.8, .6); }
           break outer;
@@ -2434,10 +2477,12 @@ function sync(dt) {
       if (z.lunge > 0) zz += Math.sin(Math.PI * (1 - z.lunge)) * .14 * z.s; // the strike lunge
       tilt += (z.lunge > 0 ? .1 * Math.sin(Math.PI * (1 - z.lunge)) : 0) - (z.recoil || 0) * .09; // leans into strikes, rocks back when hit
       yaw = Math.atan2(-(G.sx - z.x), -Math.max(.5, G.sz - z.z)); z.yaw = yaw; // keeps its eyes on you
+      if (z.limp) tilt += Math.sin(z.phase * 1.1) * .07; // hobbling on one leg
     }
     pushInst(z.model || ZOMB, z.x, (z.lift || 0) - sink, zz, yaw, sc, clip, at, z.shirt, 0, flash, z.mask || 0, tilt);
     if (!z.dying || z.dying < 1.3) pushBlob(z.x, z.z, sc * .55);
   }
+  drawBossLimbs(dt);
   flushInst(ZOMB); for (const R of ZALL) flushInst(R);
   // flying body parts
   for (const m of gibMeshes) if (m) m.n = 0;
@@ -2572,7 +2617,7 @@ function goMenu() {
 // boss test link: ?boss=12 (or window.BOSS_TEST in a preview build) starts that level a few seconds from its boss, with a full squad
 const BOSS_TEST = +(new URLSearchParams(location.search).get('boss') || window.BOSS_TEST || 0);
 async function startLevel() {
-  ensureAudio(); if (BOSS_TEST) save.level = BOSS_TEST;
+  ensureAudio(); if (BOSS_TEST) save.level = BOSS_TEST; bossLimbs.length = 0;
   { const b = $('playBtn'), t = b.textContent, slow = ZLIST && (ZLIST.bosses || []).includes(bossFor(save.level).model) && !ZBYNAME[bossFor(save.level).model]; // boss model not downloaded yet
     if (slow) { b.textContent = 'LOADING BOSS…'; b.disabled = true; } try { await readyBoss(save.level); } finally { if (slow) { b.textContent = t; b.disabled = false; } } }
   if (themeId !== themeFor(save.level)) { const b = $('playBtn'), t = b.textContent; b.textContent = 'LOADING MAP…'; b.disabled = true; try { await setTheme(themeFor(save.level), save.level); } finally { b.textContent = t; b.disabled = false; } } ['menu', 'pause', 'win', 'lose'].forEach(i => show(i, false)); show('hud', true); show('hint', true); $('hint').style.opacity = 1;
@@ -2665,7 +2710,7 @@ async function loadTroops() { // realistic squad + hero from models/troops.json 
 let ZLIST = null; const lazyLoads = {};
 function loadBossModel(name) {
   if (ZBYNAME[name] || !ZLIST || !(ZLIST.bosses || []).includes(name)) return Promise.resolve(ZBYNAME[name] || null);
-  return lazyLoads[name] || (lazyLoads[name] = loadVAT(name, 3, { gore: true }).then(R => {
+  return lazyLoads[name] || (lazyLoads[name] = loadVAT(name, 6, { gore: true }).then(R => {
     R.scale = (ZLIST.scale && ZLIST.scale[name]) || (ZLIST.scale && ZLIST.scale.all) || 1; R.lazy = true; R.mesh.castShadow = hiQ;
     ZBYNAME[name] = R; ZALL.push(R); return R;
   }).catch(e => { console.warn('boss model', name, e); delete lazyLoads[name]; return null; }));
