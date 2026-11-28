@@ -1305,7 +1305,7 @@ const POWER = {
   double:  { label: 'GATE BOOST', short: 'GATE x2', col: '#ffc531', dur: 15, unlock: 5, token: 1, hint: 'YOUR NEXT BLUE GATE COUNTS TWICE' },
   turret:  { label: 'SENTRY GUN', short: 'SENTRY', col: '#9dff6a', dur: 9, unlock: 6, crate: 1, hint: 'AN AUTO-TURRET FIGHTS BESIDE YOU' },
   w_shotgun: { label: 'SHOTGUNS', short: 'SHOTGUN', col: '#ffb15a', dur: 0, unlock: 1, crate: 1 },
-  w_rocket:  { label: 'ROCKET LAUNCHERS', short: 'ROCKETS', col: '#ff5a3d', dur: 0, unlock: 1, crate: 1 },
+  w_rocket:  { label: 'ROCKET LAUNCHERS', short: 'ROCKETS', col: '#ff5a3d', dur: 20, unlock: 1, crate: 1, hint: 'ROCKETS FOR 20 SECONDS' },
   w_flamer:  { label: 'FLAMETHROWERS', short: 'FLAMER', col: '#ff8a1f', dur: 0, unlock: 2, crate: 1 }
 };
 // squad weapons. rate is relative to the rifle; part selects the gun baked into the soldier model
@@ -1364,6 +1364,7 @@ function drawPowerIcon(g, type, cx, cy, s, ink) {
       g.fillStyle = '#fff'; g.fillRect(-.67, .55, .34, .3); g.fillRect(.33, .55, .34, .3); break;
     case 'double': g.font = '900 1.05px Bungee, Impact, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('x2', 0, .08); break;
     case 'turret': poly([[-.7, .85], [.7, .85], [.45, .2], [-.45, .2]]); g.beginPath(); g.arc(0, .05, .38, Math.PI, 0); g.fill(); g.save(); g.rotate(-.6); g.fillRect(-.09, -.95, .18, .8); g.restore(); break;
+    case 'w_rocket': poly([[0, -.95], [.26, -.55], [.26, .45], [.5, .8], [.5, .95], [-.5, .95], [-.5, .8], [-.26, .45], [-.26, -.55]]); break;
     default: g.font = '900 .5px Bungee, Impact, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText((POWER[type] && POWER[type].short) || '?', 0, 0);
   }
   g.restore();
@@ -1432,7 +1433,7 @@ function newGame(L, preview = false) {
   const st = stats();
   G = { L, preview, st, t: 0, sx: 0, tx: 0, sz: 0, speed: 5.4, vel: 5.4, halt: false, phase: 'run', len: Math.min(560, 230 + L * 26), R: 1,
     soldiers: [], fallen: [], zombies: [], bullets: [], gates: [], crates: [], tokens: [], hordes: [], boss: null, bossSpawned: false, bossHp: 300,
-    pw: { rapid: 0, spread: 0, shield: 0, freeze: 0, power: 0, sprint: 0, magnet: 0, double: 0, turret: 0 }, magT: 0, turT: 0, lossAcc: 0, lossT: 0, weapon: weaponUnlocked(save.weapon || 'rifle') ? (save.weapon || 'rifle') : 'rifle', rockets: [], flaming: false, strikes: [], kills: 0, coinsRun: 0, shake: 0, hurt: 0, doneT: 0, bubblePop: 0, shotN: 0, stompT: 0 };
+    pw: { rapid: 0, spread: 0, shield: 0, freeze: 0, power: 0, sprint: 0, magnet: 0, double: 0, turret: 0, w_rocket: 0 }, magT: 0, turT: 0, lossAcc: 0, lossT: 0, weapon: save.weapon && save.weapon !== 'rocket' && weaponUnlocked(save.weapon) ? save.weapon : 'rifle', rockets: [], flaming: false, strikes: [], kills: 0, coinsRun: 0, shake: 0, hurt: 0, doneT: 0, bubblePop: 0, shotN: 0, stompT: 0 };
   // failed this level before? backup joins at the start (up to three retries' worth), and crates lean helpful
   G.help = preview ? 0 : Math.min(3, save.fails[L] || 0); G.backup = G.help * (2 + Math.ceil(L / 2));
   for (let i = 0; i < st.men + G.backup; i++) addSoldier(true);
@@ -1462,9 +1463,9 @@ function genLevel(L) {
     E = good.kind === 'mul' ? Math.min(MAXS, E * good.v) : E + good.v;
     z -= 15;
     let crateX = null;
-    const heavy = slot === 1 ? (L === 1 ? 'w_rocket' : L === 2 ? 'w_flamer' : pick(['w_rocket', 'w_flamer', 'w_rocket', 'w_shotgun'])) : null; // every level hands out a heavy weapon early
+    const heavy = slot === 1 ? (L === 2 ? 'w_flamer' : 'w_rocket') : slot > 1 && slot % 3 === 1 ? 'w_rocket' : slot === 2 && L >= 3 ? pick(['w_flamer', 'w_shotgun']) : null; // a rocket box early, then one every few stretches, so rockets can carry you from box to box
     if (heavy || introCrate || Math.random() < .7) {
-      const type = heavy || introCrate || pick(['rapid', 'rapid', 'spread', 'shield', 'freeze', 'strike', 'recruit', 'w_shotgun', 'w_rocket', 'w_rocket', 'w_flamer', 'power', 'turret'].filter(k => POWER[k].unlock <= L));
+      const type = heavy || introCrate || pick(['rapid', 'rapid', 'spread', 'shield', 'freeze', 'strike', 'recruit', 'w_shotgun', 'w_flamer', 'power', 'turret'].filter(k => POWER[k].unlock <= L));
       if (!heavy) introCrate = null; crateX = rand(-3.2, 3.2);
       G.crates.push(makeCrate(crateX, z, type, Math.round((heavy ? .6 : 1) * (10 + L * 4 + E * .6)))); // a squad of 8 breaks one in a second or two
     }
@@ -1631,7 +1632,7 @@ function rocketBoom(r, direct) {
   r.dead = true;
   explosion(r.x, .55, r.z, 1.7, false); sfx.rocketPop(r.x, r.z); G.shake = Math.max(G.shake, .18);
   if (direct) hurtZombie(direct, r.dmg, 'blast', r.x, r.z + 1);
-  blast(r.x, r.z, 2.1, r.dmg * .6);
+  blast(r.x, r.z, 2.5, r.dmg * 1.0);
   for (const c of G.crates) if (!c.dead && Math.abs(c.x - r.x) < 2 && Math.abs(c.z - r.z) < 2) { c.hp -= r.dmg * 2; c.dirty = 1; c.flash = .06; if (c.hp <= 0) crateBreak(c); }
 }
 function updateRockets(dt) {
@@ -1694,7 +1695,8 @@ function applyPower(type) {
   if (first && !G.preview) { save.seen.push(type); store.set('seen', save.seen); }
   banner(P.label, type.startsWith('w_') ? 'NEW WEAPON' : first && P.hint ? 'NEW: ' + P.hint : '', first ? 2400 : 1300, P.col); sfx.power(type);
   if (type === 'strike') { sfx.missile(); for (let i = 0; i < 9; i++) G.strikes.push({ t: .25 + i * .12, x: rand(-HALF + .8, HALF - .8), z: G.sz - 7 - i * 3.6 }); }
-  else if (type.startsWith('w_')) setWeapon(type.slice(2));
+  else if (type === 'w_rocket') { if (G.weapon !== 'rocket') G.baseWeapon = G.weapon; setWeapon('rocket'); G.pw.w_rocket = P.dur; } // rockets run on a timer, then the squad goes back to its gun
+  else if (type.startsWith('w_')) { G.baseWeapon = type.slice(2); if (!(G.pw.w_rocket > 0)) setWeapon(G.baseWeapon); } // picked up during rockets: swaps in when they run out
   else if (type === 'recruit') { const add = 5 + Math.round(G.L * 1.5); setSquadCount(G.soldiers.length + add); floatText('+' + add, G.sx, 3, G.sz - 1, '#5ee07a', 32); }
   else { G.pw[type] = P.dur; if (type === 'turret') { turretGrp.position.set(clamp(G.sx + G.R + 1.1, -HALF + .6, HALF - .6), 0, G.sz); turretPop = 0; } }
 }
@@ -1715,6 +1717,7 @@ function smartCrate(c) {
   if (c.type.startsWith('w_')) return null; // keep the level's heavy weapon
   if (n < target * .6 || (G.help && n < target * 1.2 && Math.random() < .5)) return 'recruit';
   if (n < target && Math.random() < .6) return pick(['power', 'rapid', 'shield', 'spread'].filter(ok));
+  if (L >= 5 && !(G.pw.w_rocket > 0) && Math.random() < .25 + .1 * G.help) return 'w_rocket'; // tougher levels hand out more rockets
   return null;
 }
 function crateBreak(c) {
@@ -1988,7 +1991,7 @@ const drag = { on: false, id: null, x0: 0, sx0: 0 }; const keys = {};
 canvas.addEventListener('pointerdown', e => {
   ensureAudio(); if (state !== 'play') return;
   if (drag.on && drag.id !== e.pointerId) { try { canvas.releasePointerCapture(drag.id); } catch (err) {} }
-  drag.on = true; drag.id = e.pointerId; drag.x0 = e.clientX; drag.sx0 = G.tx; drag.lx = e.clientX; drag.ly = e.clientY;
+  clearKeys(); drag.on = true; drag.id = e.pointerId; drag.x0 = e.clientX; drag.sx0 = G.tx; drag.lx = e.clientX; drag.ly = e.clientY;
   try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
   $('hint').style.opacity = 0;
 });
@@ -2001,9 +2004,16 @@ canvas.addEventListener('pointermove', e => {
 });
 const endDrag = e => { if (e.pointerId === drag.id) { drag.on = false; drag.id = null; } };
 canvas.addEventListener('pointerup', endDrag); canvas.addEventListener('pointercancel', endDrag); canvas.addEventListener('lostpointercapture', endDrag);
-addEventListener('blur', () => { drag.on = false; drag.id = null; for (const k in keys) keys[k] = false; });
-addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; if ((e.key === 'Escape' || e.key === 'p') && (state === 'play' || state === 'paused')) togglePause(); });
-addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+// keys: a key counts as held only while the browser keeps repeating it (or until its keyup), so a keyup lost to the
+// page around the game (focus moving, an embedding frame, a phone's on-screen keys) can't leave the squad stuck to one side
+const keyT = {};
+const keyName = e => ({ ArrowLeft: 'arrowleft', ArrowRight: 'arrowright', KeyA: 'a', KeyD: 'd' })[e.code] || (e.key || '').toLowerCase();
+const clearKeys = () => { for (const k in keys) keys[k] = false; };
+addEventListener('blur', () => { drag.on = false; drag.id = null; clearKeys(); });
+document.addEventListener('visibilitychange', clearKeys);
+addEventListener('keydown', e => { const k = keyName(e); keys[k] = true; keyT[k] = performance.now(); if (k.startsWith('arrow')) e.preventDefault(); if ((e.key === 'Escape' || e.key === 'p') && (state === 'play' || state === 'paused')) togglePause(); });
+addEventListener('keyup', e => { const k = keyName(e); keys[k] = false; if (k === 'arrowleft' || k === 'a') keys.arrowleft = keys.a = false; if (k === 'arrowright' || k === 'd') keys.arrowright = keys.d = false; });
+const held = k => keys[k] && performance.now() - (keyT[k] || 0) < 900; // a held key repeats every ~30 ms after the first ~0.5 s
 
 /* ================= update ================= */
 const buckets = new Map();
@@ -2011,10 +2021,10 @@ function update(dt) {
   G.t += dt;
   const st = G.st;
   const sprint = G.pw.sprint > 0;
-  if (fpsAiming()) { const kx = (keys['d'] || keys['arrowright'] ? 1 : 0) - (keys['a'] || keys['arrowleft'] ? 1 : 0), ky = (keys['s'] || keys['arrowdown'] ? 1 : 0) - (keys['w'] || keys['arrowup'] ? 1 : 0); if (kx || ky) fpsLook(kx * 260 * dt, ky * 260 * dt); }
+  if (fpsAiming()) { const kx = (held('d') || held('arrowright') ? 1 : 0) - (held('a') || held('arrowleft') ? 1 : 0), ky = (held('s') || held('arrowdown') ? 1 : 0) - (held('w') || held('arrowup') ? 1 : 0); if (kx || ky) fpsLook(kx * 260 * dt, ky * 260 * dt); }
   else {
-  if (keys['a'] || keys['arrowleft']) G.tx -= (sprint ? 12 : 8) * dt;
-  if (keys['d'] || keys['arrowright']) G.tx += (sprint ? 12 : 8) * dt;
+  if (held('a') || held('arrowleft')) G.tx -= (sprint ? 12 : 8) * dt;
+  if (held('d') || held('arrowright')) G.tx += (sprint ? 12 : 8) * dt;
   }
   G.tx = clamp(G.tx, -HALF + .9, HALF - .9);
   G.sx += (G.tx - G.sx) * (1 - Math.exp(-dt * (sprint ? 20 : 12)));
@@ -2035,15 +2045,15 @@ function update(dt) {
   for (const h of G.hordes) if (!h.spawned && h.z > G.sz - 72) spawnHorde(h);
   if (!G.bossSpawned && G.sz < -G.len + 70) {
     G.bossSpawned = true;
-    G.bossHp = Math.round(30 * Math.max(8, G.soldiers.length) * G.st.dmg * (G.st.rate / 3.4) * (1 + G.L * .06) * bossFor(G.L).hp * (G.L === 1 ? .7 : 1) * ({ rocket: .75, flamer: .8 }[G.weapon] || 1) * (fpsOn ? (G.L <= 2 ? 1.6 : 2.4) : 1)); // rockets and flamers do less to one big target; first person makes a longer fight that your own aim shortens (gentler on the first two levels)
+    G.bossHp = Math.round(30 * Math.max(8, G.soldiers.length) * G.st.dmg * (G.st.rate / 3.4) * (1 + G.L * .06) * bossFor(G.L).hp * (G.L === 1 ? .7 : 1) * ({ flamer: .8 }[G.weapon] || 1) * (fpsOn ? (G.L <= 2 ? 1.6 : 2.4) : 1)); // flamers do less to one big target; first person makes a longer fight that your own aim shortens (gentler on the first two levels)
     // supply drop: if the squad's gun is wrong for this boss, or the squad is thin, a crate lands in its lane before the fight
-    { const B = bossFor(G.L), poor = G.weapon === 'flamer' || (G.weapon !== 'rocket' && (B.res.bullet || 0) >= .3), thin = G.soldiers.length < Math.min(90, 10 + G.L * 6);
+    { const B = bossFor(G.L), poor = G.weapon !== 'rocket' && (G.L >= 4 || G.weapon === 'flamer' || (B.res.bullet || 0) >= .3), thin = G.soldiers.length < Math.min(90, 10 + G.L * 6);
       if (poor || thin) { const dc = makeCrate(clamp(G.sx, -3, 3), G.sz - 16, poor ? 'w_rocket' : 'recruit', Math.round(8 + G.L * 2)); dc.smart = true; G.crates.push(dc); floatText('SUPPLY DROP!', G.sx, 3.4, G.sz - 16, POWER[dc.type].col, 24); } }
     G.boss = makeZombie(0, -G.len - 30, 'boss'); G.zombies.push(G.boss);
     $('bossName').textContent = bossFor(G.L).name;
   }
 
-  for (const k in G.pw) if (G.pw[k] > 0) { G.pw[k] = Math.max(0, G.pw[k] - dt); if (G.pw[k] === 0 && k !== 'double') sfx.expire(); }
+  for (const k in G.pw) if (G.pw[k] > 0) { G.pw[k] = Math.max(0, G.pw[k] - dt); if (G.pw[k] === 0 && k !== 'double') { sfx.expire(); if (k === 'w_rocket' && G.weapon === 'rocket') { setWeapon(G.baseWeapon || 'rifle'); floatText('ROCKETS OUT', G.sx, 3.4, G.sz - 1, POWER.w_rocket.col, 24); } } }
   if (G.pw.magnet > 0 && (G.magT -= dt) <= 0) { // the magnet pulls crates ahead open, one at a time
     const c = G.crates.find(c => !c.dead && G.sz - c.z > -1 && G.sz - c.z < 25);
     if (c) { G.magT = .3; const col = new THREE.Color(POWER.magnet.col); for (let i = 0; i <= 14; i++) { const f = i / 14; sparks.add(G.sx + (c.x - G.sx) * f, 1 + Math.sin(f * Math.PI) * 1.6, G.sz + (c.z - G.sz) * f, rand(-.4, .4), 1, rand(-.4, .4), .35, col); } crateBreak(c); }
@@ -2083,7 +2093,7 @@ function update(dt) {
         const [x, z] = soldierWorld(s), sc = s.hero ? 1.45 : 1, aim = G.boss && !G.boss.dying && G.phase === 'boss' ? G.boss : bigT && (s.hero || s.ab < .65) ? bigT : crateT && Math.abs(crateT.x - x) < 2.6 ? crateT : near.length ? near[Math.floor(s.ab * near.length)] : null; // soldiers near a crate's lane aim at it
         if (s.hero || wk === 'rifle') fire(x + .05 * sc, z - .7 * sc, s.hero ? st.dmg * 1.5 : st.dmg / p, s.hero, aim);
         else if (wk === 'shotgun') { for (let k = 0; k < 5; k++) addBullet(x + .05, z - .7, rand(-.2, .2) + (aim ? clamp(Math.atan2(aim.x - x, Math.max(2, z - aim.z)), -.45, .45) : 0), st.dmg * .95 / p, false, false, 'pellet', 21); }
-        else if (wk === 'rocket') addRocket(x + .05, z - .8, target, st.dmg * 2.2 / p);
+        else if (wk === 'rocket') addRocket(x + .05, z - .8, target, st.dmg * 2.8 / p);
         else if (wk === 'flamer') flamePuff(x + .05, z - .75, sc);
         fired++; if (s.hero) heroFired = true;
         if (wk !== 'flamer' || s.hero) if (s.hero || Math.random() < (wk === 'shotgun' ? .8 : .3)) muzzle.add(x + .05 * sc, .72 * sc, z - (s.hero ? 1.05 : .75) * sc, 0, 0, -2, s.hero ? .06 : wk === 'shotgun' ? .07 : .045, C.spark);
@@ -2221,7 +2231,7 @@ function update(dt) {
   // crates
   for (const c of G.crates) {
     if (c.dead) continue;
-    if (!c.smart && c.z > G.sz - 45) { c.smart = true; const t = smartCrate(c); if (t && t !== c.type) { c.type = t; c.halo.material.color.set(POWER[t].col); drawCrate(c); } }
+    if (!c.smart && c.z > G.sz - 45) { c.smart = true; const t = smartCrate(c); if (t && t !== c.type) { c.type = t; c.hp = c.maxHp = Math.round(c.hp * .6); c.x += (clamp(G.sx, -3, 3) - c.x) * .5; c.mesh.position.x = c.halo.position.x = c.x; c.halo.material.color.set(POWER[t].col); drawCrate(c); } } // a crate the squad needs is easier to break and sits nearer its lane
     c.flash = Math.max(0, c.flash - dt);
     const tick = G.t * 12 | 0; if (c.dirty && tick !== c.lastDraw) { c.dirty = 0; c.lastDraw = tick; drawCrate(c); }
     const f = c.flash > 0 ? .6 : 0; c.mesh.material.emissive.setRGB(f, f, f);
@@ -2392,7 +2402,7 @@ function sync(dt) {
 
 /* ================= HUD ================= */
 const chipEls = {};
-for (const k of ['rapid', 'spread', 'power', 'shield', 'freeze', 'sprint', 'magnet', 'double', 'turret']) { // a running power-up: its icon inside a ring that drains
+for (const k of ['w_rocket', 'rapid', 'spread', 'power', 'shield', 'freeze', 'sprint', 'magnet', 'double', 'turret']) { // a running power-up: its icon inside a ring that drains
   const d = document.createElement('div'); d.className = 'pwr'; d.style.setProperty('--c', POWER[k].col); d.title = POWER[k].label;
   const img = new Image(); img.alt = POWER[k].short; d.appendChild(img); d.hidden = true; $('chips').appendChild(d); chipEls[k] = d;
 }
@@ -2448,7 +2458,7 @@ function renderMenu() {
 const WCOL = { rifle: '#f4f1e8', shotgun: '#ffb15a', rocket: '#ff7a5a', flamer: '#ff9a3a' };
 function updateWeaponChip() { if (!G) return; const c = $('wpnChip'); c.textContent = WEAPONS[G.weapon].name; c.style.setProperty('--c', WCOL[G.weapon]); }
 function refreshLoadout() {
-  if (!weaponUnlocked(save.weapon)) save.weapon = 'rifle';
+  if (!weaponUnlocked(save.weapon) || save.weapon === 'rocket') save.weapon = 'rifle';
   $('wpnBtn').textContent = 'WEAPON: ' + WEAPONS[save.weapon].name;
   $('mapBtn').textContent = 'MAP: ' + (save.map === 'auto' ? 'AUTO' : THEMES[save.map].name.split(' ').pop());
 }
@@ -2501,7 +2511,7 @@ $('playBtn').onclick = startLevel; $('nextBtn').onclick = startLevel; $('retryBt
 $('winMenuBtn').onclick = goMenu; $('loseMenuBtn').onclick = goMenu; $('quitBtn').onclick = goMenu;
 $('pauseBtn').onclick = togglePause; $('resumeBtn').onclick = togglePause;
 $('soundBtn').onclick = $('soundBtn2').onclick = () => { ensureAudio(); setSound(!soundOn); store.set('sound', soundOn); refreshSound(); };
-$('wpnBtn').onclick = () => { const list = WEAPON_ORDER.filter(weaponUnlocked); save.weapon = list[(list.indexOf(save.weapon) + 1) % list.length]; persist(); refreshLoadout(); ensureAudio(); sfx.weapon(save.weapon); if (list.length === 1) banner('SHOTGUN', 'UNLOCKS AT LEVEL 2', 1400); };
+$('wpnBtn').onclick = () => { const list = WEAPON_ORDER.filter(w => w !== 'rocket' && weaponUnlocked(w)); save.weapon = list[(list.indexOf(save.weapon) + 1) % list.length]; persist(); refreshLoadout(); ensureAudio(); sfx.weapon(save.weapon); if (list.length === 1) banner('SHOTGUN', 'UNLOCKS AT LEVEL 2', 1400); };
 $('mapBtn').onclick = () => { const opts = ['auto', ...THEME_ORDER]; save.map = opts[(opts.indexOf(save.map) + 1) % opts.length]; persist(); refreshLoadout(); newGame(save.level, true); banner(THEMES[themeFor(save.level)].name, save.map === 'auto' ? 'CHANGES EVERY LEVEL' : 'SELECTED MAP', 1200); };
 $('fpsBtn').onclick = $('fpsBtn2').onclick = () => { fpsOn = !fpsOn; store.set('fps', fpsOn); refreshSound(); };
 $('goreBtn').onclick = $('goreBtn2').onclick = () => { goreOn = !goreOn; store.set('gore', goreOn); refreshSound(); if (!goreOn) { drops.length = 0; sprays.length = 0; gibs.length = 0; bloodDecals.clear(); } };
