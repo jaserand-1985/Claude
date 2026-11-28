@@ -5,7 +5,7 @@ const OUT = process.argv[2] || '/tmp/fps'; require('fs').mkdirSync(OUT, { recurs
 const LEVELS = (process.argv[3] || '1,2,3,4,5,6').split(',').map(Number);
 (async () => {
   const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
-  const page = await browser.newPage({ viewport: { width: 412, height: 870 }, hasTouch: true });
+  const page = await browser.newPage({ viewport: { width: 412, height: 870 }, deviceScaleFactor: +(process.env.DSF || 1), hasTouch: true });
   const errs = []; page.on('pageerror', e => { errs.push(e.message); console.log('pageerror', e.message); });
   page.on('console', m => { if (m.type() === 'error') errs.push(m.text()); console.log('console', m.text()); });
   await page.goto('http://localhost:' + (process.env.PORT || 8790) + '/index.html');

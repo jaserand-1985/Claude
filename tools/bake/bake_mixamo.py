@@ -248,7 +248,7 @@ FMT = os.environ.get('FMT', 'jpg')  # jpg, or webp (smaller at the same quality)
 def save_atlas(arr, path, q):
     im = PILImage.fromarray((np.clip(arr[::-1, :, :3], 0, 1) * 255 + .5).astype(np.uint8))
     im.save(path, quality=q, method=6) if path.endswith('.webp') else im.save(path, quality=q)
-save_atlas(atlas, OUT + '.' + FMT, 88 if FMT == 'jpg' else 82)
+save_atlas(atlas, OUT + '.' + FMT, int(os.environ.get('Q', 88 if FMT == 'jpg' else 82)))  # bosses use Q=94
 # tangent-space normal maps, in the same atlas layout (flat where a material has none); the game reads them per pixel
 ntile = {}
 for m in mats:
@@ -261,7 +261,7 @@ if NORMALS:
     for t, im in ntile.items():
         im.colorspace_settings.name = 'Non-Color'; im2 = im.copy(); im2.scale(NTEX, NTEX)
         natlas[cell(t, NTEX)] = np.array(im2.pixels[:], np.float32).reshape(NTEX, NTEX, 4); bpy.data.images.remove(im2)
-    save_atlas(natlas, OUT + '-n.' + FMT, 90)
+    save_atlas(natlas, OUT + '-n.' + FMT, max(90, int(os.environ.get('Q', 0))))
 atlas_flip = atlas[::-1]  # row 0 = top, to sample with (u, 1 - v) after our flip
 
 def sample(uv):

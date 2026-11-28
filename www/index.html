@@ -339,7 +339,8 @@ const sfx = {
 const canvas = $('c');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 let hiQ = store.get('gfx', 'high') === 'high';
-const DPR = () => Math.min(window.devicePixelRatio || 1, hiQ ? 1.75 : 1.25);
+let bossRes = false; // first-person boss fights render at the phone's full pixel density, so the bosses' textures hold up close
+const DPR = () => Math.min(window.devicePixelRatio || 1, hiQ ? (bossRes ? 3 : 2) : 1.25);
 renderer.setPixelRatio(DPR());
 renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0;
@@ -540,9 +541,9 @@ async function loadVAT(name, max, opts = {}) {
     g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(V * 3), 3));
     nTex = new THREE.DataTexture(new Uint8Array(buf, o.nvat, meta.W * meta.rows * meta.frames * 4), meta.W, meta.rows * meta.frames, THREE.RGBAFormat, THREE.UnsignedByteType);
     nTex.minFilter = nTex.magFilter = THREE.NearestFilter; nTex.generateMipmaps = false; nTex.needsUpdate = true;
-    map = await new THREE.TextureLoader().loadAsync(`models/${meta.tex}`); map.colorSpace = THREE.SRGBColorSpace; map.flipY = false; map.anisotropy = Math.min(4, maxAniso);
+    map = await new THREE.TextureLoader().loadAsync(`models/${meta.tex}`); map.colorSpace = THREE.SRGBColorSpace; map.flipY = false; map.anisotropy = maxAniso;
     // models from tools/bake/rig_sketchfab.py can carry a tangent-space normal map (read per pixel, no tangents needed)
-    if (meta.ntex && !opts.noNormals) try { nMap = await new THREE.TextureLoader().loadAsync(`models/${meta.ntex}`); nMap.flipY = false; nMap.colorSpace = THREE.NoColorSpace; } catch (e) { nMap = null; }
+    if (meta.ntex && !opts.noNormals) try { nMap = await new THREE.TextureLoader().loadAsync(`models/${meta.ntex}`); nMap.flipY = false; nMap.colorSpace = THREE.NoColorSpace; nMap.anisotropy = maxAniso; } catch (e) { nMap = null; }
   }
   for (const k of ['walk', 'run', 'punch', 'death', 'hit']) if (!meta.clips[k]) meta.clips[k] = meta.clips.walk || Object.values(meta.clips)[0]; // missing clips fall back to walking
   const mat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: !textured, map, normalMap: nMap, roughness: textured ? .82 : .7, metalness: .05, side: opts.gore ? THREE.DoubleSide : THREE.FrontSide });
@@ -1910,6 +1911,7 @@ function fpsUpdate(dt) {
     if (!save.seen.includes('fps')) { F.hintT = 4; if (!G.preview) { save.seen.push('fps'); store.set('seen', save.seen); } } else F.hintT = 2;
   }
   if (!want) F.on = false;
+  if (F.on !== bossRes) { bossRes = F.on; resize(); }
   F.k = clamp(F.k + dt * (want ? .9 : -1.1), 0, 1);
   F.hitT -= dt; F.hintT -= dt; F.kick = Math.max(0, F.kick - dt * 9);
   const firing = F.on && F.k > .8 && b && !b.dying && G.phase === 'boss';
@@ -2014,7 +2016,7 @@ function fpsBossLight(e) {
     squadFill.color.copy(fillBase.c).lerp(KEY_COL, e);
   }
 }
-function fpsReset() { fogBase.lit = false; RIM_AMT.value = 1; squadFill.distance = 9; squadFill.color.set('#cdd8f0'); fpsGun.g.visible = false; fpsTr.length = 0; fpsTrMesh.count = 0; $('xhair').classList.remove('on'); $('fpsHint').classList.remove('on'); }
+function fpsReset() { if (bossRes) { bossRes = false; resize(); } fogBase.lit = false; RIM_AMT.value = 1; squadFill.distance = 9; squadFill.color.set('#cdd8f0'); fpsGun.g.visible = false; fpsTr.length = 0; fpsTrMesh.count = 0; $('xhair').classList.remove('on'); $('fpsHint').classList.remove('on'); }
 
 /* ---------- input ---------- */
 const drag = { on: false, id: null, x0: 0, sx0: 0 }; const keys = {};
@@ -2506,13 +2508,16 @@ function goMenu() {
   state = 'menu'; ['hud', 'pause', 'win', 'lose', 'hint'].forEach(i => show(i, false)); clearTimeout(bannerTO); $('banner').classList.remove('on'); // no leftover power-up banner over the menu show('menu', true); $('bossbar').hidden = true;
   newGame(save.level, true); renderMenu();
 }
+// boss test link: ?boss=12 (or window.BOSS_TEST in a preview build) starts that level a few seconds from its boss, with a full squad
+const BOSS_TEST = +(new URLSearchParams(location.search).get('boss') || window.BOSS_TEST || 0);
 async function startLevel() {
-  ensureAudio();
+  ensureAudio(); if (BOSS_TEST) save.level = BOSS_TEST;
   { const b = $('playBtn'), t = b.textContent, slow = ZLIST && (ZLIST.bosses || []).includes(bossFor(save.level).model) && !ZBYNAME[bossFor(save.level).model]; // boss model not downloaded yet
     if (slow) { b.textContent = 'LOADING BOSS…'; b.disabled = true; } try { await readyBoss(save.level); } finally { if (slow) { b.textContent = t; b.disabled = false; } } }
   if (themeId !== themeFor(save.level)) { const b = $('playBtn'), t = b.textContent; b.textContent = 'LOADING MAP…'; b.disabled = true; try { await setTheme(themeFor(save.level), save.level); } finally { b.textContent = t; b.disabled = false; } } ['menu', 'pause', 'win', 'lose'].forEach(i => show(i, false)); show('hud', true); show('hint', true); $('hint').style.opacity = 1;
   $('bossbar').hidden = true; fpsReset(); for (const k in chipEls) chipEls[k].hidden = true;
   newGame(save.level); $('hudLv').textContent = 'LEVEL ' + save.level; lastCoins = -1; updateWeaponChip();
+  if (BOSS_TEST) { while (G.soldiers.length < 30) addSoldier(true); G.sz = -G.len + 30; G.zombies.length = 0; G.hordes.forEach(h => h.spawned = true); for (const g of G.gates) { g.passed = true; g.grp.visible = false; } }
   state = 'play'; drag.on = false;
   banner('LEVEL ' + save.level, G.backup ? 'BACKUP ARRIVED: +' + G.backup + ' SOLDIERS' : THEMES[themeFor(save.level)].name + ' · ' + moodFor(save.level).name, G.backup ? 2200 : 1600, G.backup ? '#5ee07a' : '');
   requestWake();
@@ -2628,7 +2633,7 @@ async function loadZombieModels() {
   try { return await (await fetch(`models/${list.gibs || names[0]}-gibs.json`)).json(); } catch (e) { return null; }
 }
 Promise.all([document.fonts ? document.fonts.load('40px Bungee').catch(() => {}) : 0, loadTroops(), loadVAT('zombie', MAXZ, { gore: true }), fetch('models/zombie-gibs.json').then(r => r.json()), loadZombieModels()]).then(([, s, z, gibData, texGibs]) => {
-  SOLD = s; ZOMB = z; buildGibs(texGibs || gibData); $('playBtn').disabled = false; goMenu(); fpsPrewarm(); requestAnimationFrame(frame);
+  SOLD = s; ZOMB = z; buildGibs(texGibs || gibData); $('playBtn').disabled = false; if (BOSS_TEST) save.level = BOSS_TEST; goMenu(); fpsPrewarm(); requestAnimationFrame(frame);
 }).catch(err => { $('playBtn').textContent = 'COULD NOT LOAD MODELS'; console.error(err); });
 window.__dt = { info: (hide) => { const g = []; if (hide) scene.traverse(o => { if (o.isInstancedMesh && o !== SOLD.mesh && !(HEROM && o === HEROM.mesh) && o !== ZOMB.mesh && !ZALL.some(R => R.mesh === o) && o.visible) { o.visible = false; g.push(o); } }); renderer.render(scene, camera); const r = { tris: renderer.info.render.triangles, calls: renderer.info.render.calls }; g.forEach(o => o.visible = true); return r; }, mk: (x, z, t = 'walker') => makeZombie(x, z, t), audio: () => ({ ctx: AC && AC.state, loaded: Object.keys(buffers).length, voices }), camera, THREE, get G() { return G; }, get state() { return state; }, start: startLevel, power: t => applyPower(t), setTheme, step(dt) { if (state === 'play') update(dt); }, tick(dt, draw) { if (state === 'play') update(dt); sync(state === 'paused' ? 0 : dt); updateHud(); updateFloats(state === 'paused' ? 0 : dt); if (draw) (hiQ && composer ? composer.render() : renderer.render(scene, camera)); }, get gore() { return goreOn; }, sync, render: () => (hiQ && composer ? composer.render() : renderer.render(scene, camera)), save, persist, programs: () => renderer.info.programs.length, headAt: z => partWorld(z, 1, new THREE.Vector3()), torsoAt: z => partWorld(z, 0, new THREE.Vector3()) };
 </script>
