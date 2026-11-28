@@ -117,7 +117,8 @@ for m in mats:
     im = color_image(m)
     key = im.name if im else None
     if key not in tile_of: tile_of[key] = len(tiles); tiles.append(im)
-WHITE_PATCH = bool(MELEE)  # melee weapons: paint a small white corner of tile 0 instead of adding a whole white tile
+WHITE_PATCH = bool(MELEE) or os.environ.get('WHITE_PATCH') == '1'  # paint a small white corner of tile 0 instead of adding a whole white tile (melee weapons; guns with WHITE_PATCH=1)
+PATCH = max(8, TEX // 64)  # big enough to stay white down the mipmaps the guns are drawn at
 if GUNS and not WHITE_PATCH: tiles.append('white')  # a plain white tile, so the guns' vertex colours show through the texture
 NT = len(tiles)
 GC = NT if NT <= 4 else math.ceil(math.sqrt(NT)); GR = math.ceil(NT / GC)  # tiles in a row, or a square grid when there are many
@@ -155,7 +156,7 @@ for gp in guns:  # unindexed triangles, one game vertex each
     n = len(gp['pos']) // 3
     gun_local.append(np.array(gp['pos'], np.float32).reshape(-1, 3)); gun_nlocal.append(np.array(gp['nor'], np.float32).reshape(-1, 3))
     for i in range(n):
-        idx.append(len(uvs)); uvs.append((4 / (TEX * GC), 4 / (TEX * GR)) if WHITE_PATCH else ((tcol(NT - 1) + .5) / GC, 1 - (trow(NT - 1) + .5) / GR)); grp.append(0); parts.append(gp['part']); cols.append(tuple(gp['color']))
+        idx.append(len(uvs)); uvs.append((PATCH / 2 / (TEX * GC), PATCH / 2 / (TEX * GR)) if WHITE_PATCH else ((tcol(NT - 1) + .5) / GC, 1 - (trow(NT - 1) + .5) / GR)); grp.append(0); parts.append(gp['part']); cols.append(tuple(gp['color']))
 VB = V; V = len(uvs)
 if guns: gun_local = np.concatenate(gun_local) * GUN_SCALE; gun_nlocal = np.concatenate(gun_nlocal)
 
@@ -255,7 +256,7 @@ for t, im in enumerate(tiles):
     im2 = im.copy(); im2.scale(TEX, TEX)
     px = np.array(im2.pixels[:], np.float32).reshape(TEX, TEX, 4)
     atlas[cell(t)] = px; bpy.data.images.remove(im2)
-if WHITE_PATCH: atlas[-8:, :8, :3] = 1  # top-left 8x8 px of the first tile (image row 0 = last array row)
+if WHITE_PATCH: atlas[-PATCH:, :PATCH, :3] = 1  # top-left corner of the first tile (image row 0 = last array row)
 from PIL import Image as PILImage
 FMT = os.environ.get('FMT', 'jpg')  # jpg, or webp (smaller at the same quality)
 def save_atlas(arr, path, q):

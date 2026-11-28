@@ -842,6 +842,8 @@ float bn3(vec3 p) { vec3 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f);
         float ring = smoothstep(1.6, .45, r + n * .4), hole = smoothstep(.4, .26, r + n * .1);
         diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.1, .006, .004), ring * .88); diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.012, .002, .002), hole);
         blood = max(blood, ring); }`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+      normal = normalize(mix(normal, nonPerturbedNormal, vGun)); // guns all sample one white texel, so their UVs give no tangent frame: keep them off the normal map`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
       roughnessFactor = mix(mix(${wet.toFixed(2)}, .44, vGun), .2, blood); // guns are worn metal, fresh blood is glossy`)
       .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
