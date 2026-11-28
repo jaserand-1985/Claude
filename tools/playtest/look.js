@@ -35,6 +35,7 @@ require('fs').mkdirSync(OUT, { recursive: true });
       D.sync(0);
       if (kind === 'close') { const s = G.soldiers[0], x = G.sx + s.ox, z = G.sz + s.oz; D.camera.position.set(x + 1.6, 1.9, z - 3.4); D.camera.lookAt(x, 1.1, z); }
       if (kind === 'zclose') { const z = G.zombies.filter(z => !z.dying && z.type === 'walker').sort((a, b) => b.z - a.z)[0]; if (z) { D.camera.position.set(z.x - 1.2, 2.0, z.z + 3); D.camera.lookAt(z.x, 1.2, z.z); } }
+      document.querySelectorAll('.ft').forEach(e => e.hidden = true); // floating labels are placed by the frame loop, which __freeze holds, so they would sit unplaced in the top corner
       D.render();
       return { L, map: D.G && D.state, theme: D.themeId && D.themeId(), boss: G.boss && G.boss.bt && G.boss.bt.name, n: G.soldiers.length, z: G.zombies.length, calls: D.info ? D.info().calls : 0 };
     }, [kind, L, extra]);
