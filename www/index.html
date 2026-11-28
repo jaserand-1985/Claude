@@ -90,6 +90,8 @@ h2{font-family:var(--display);font-size:clamp(30px,9vw,40px);margin:0;color:var(
 .stat{background:#1b2640;border-radius:10px;padding:9px;text-align:center}
 .stat small{display:block;font-size:10px;letter-spacing:.14em;color:var(--muted);font-weight:800}
 .stat b{font-family:var(--display);font-size:22px;font-variant-numeric:tabular-nums}
+.linkbtn{display:block;margin:2px auto 0;background:none;border:0;color:var(--muted);font:inherit;font-size:12px;letter-spacing:.12em;text-decoration:underline;padding:8px 16px;cursor:pointer}
+.credlist{max-height:52vh;overflow:auto;text-align:left;font-size:13px;line-height:1.45;color:var(--muted)}.credlist p{margin:0 0 10px}.credlist b{color:#fff}
 .note{margin:0;text-align:center;color:var(--muted);font-size:13px;line-height:1.4}
 .flash{position:absolute;inset:0;pointer-events:none;box-shadow:inset 0 0 140px 30px rgba(255,74,61,0)}
 @media (prefers-reduced-motion:reduce){.title{transform:none}.banner{transition:none}}
@@ -126,8 +128,19 @@ h2{font-family:var(--display);font-size:clamp(30px,9vw,40px);margin:0;color:var(
       <div class="row2"><button class="btn ghost" id="soundBtn">SOUND: ON</button><button class="btn ghost" id="gfxBtn">GRAPHICS: HIGH</button></div>
       <div class="row2"><button class="btn ghost" id="goreBtn">GORE: ON</button><button class="btn ghost" id="fpsBtn">BOSS: 1ST PERSON</button></div>
       <button class="btn ghost" id="resetBtn">NEW GAME: START AT LEVEL 1</button>
+      <button class="linkbtn" id="creditsBtn">CREDITS</button>
     </div></div>
   </div>
+
+  <div id="credits" hidden><div class="sheet"><div class="panel">
+    <h2>CREDITS</h2>
+    <div class="credlist">
+      <p><b>Boss and zombie models</b> from Sketchfab, used under the Sketchfab Standard license:</p>
+      <p>The Butcher: "Horror Maniac with Knife" by loundzzz<br>The Crawler: "Scary Monster" by L. (A2555)<br>The Flayed: "Undead" by Regulator<br>The Axeman: "Zombie" by David Glynch<br>The Abomination: "Mutant Monster" by raydev<br>Punk and Clerk zombies: "spiky haired male zombie" and "male office worker zombie character" by PJ8080!<br>Lurker zombie: "Zombie" by L. (A2555)</p>
+      <p>Squad and other zombies: Mixamo characters and animations, and Quaternius (CC0). Scenery: Quaternius (CC0). Sounds: CC0 recordings, see audio/CREDITS.md.</p>
+    </div>
+    <button class="btn" id="creditsClose">BACK</button>
+  </div></div></div>
 
   <div id="pause" hidden><div class="sheet"><div class="panel">
     <h2>PAUSED</h2>
@@ -513,16 +526,18 @@ async function loadVAT(name, max, opts = {}) {
   tex.minFilter = tex.magFilter = THREE.NearestFilter; tex.generateMipmaps = false; tex.needsUpdate = true;
   // textured models (tools/bake/bake_mixamo.py) also carry texture coordinates and a baked normal per vertex per frame
   const textured = !!(o.uv !== undefined && meta.tex);
-  let nTex = null, map = null;
+  let nTex = null, map = null, nMap = null;
   if (textured) {
     g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(buf, o.uv, V * 2), 2));
     g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(V * 3), 3));
     nTex = new THREE.DataTexture(new Uint8Array(buf, o.nvat, meta.W * meta.rows * meta.frames * 4), meta.W, meta.rows * meta.frames, THREE.RGBAFormat, THREE.UnsignedByteType);
     nTex.minFilter = nTex.magFilter = THREE.NearestFilter; nTex.generateMipmaps = false; nTex.needsUpdate = true;
     map = await new THREE.TextureLoader().loadAsync(`models/${meta.tex}`); map.colorSpace = THREE.SRGBColorSpace; map.flipY = false; map.anisotropy = Math.min(4, maxAniso);
+    // models from tools/bake/rig_sketchfab.py can carry a tangent-space normal map (read per pixel, no tangents needed)
+    if (meta.ntex && !opts.noNormals) try { nMap = await new THREE.TextureLoader().loadAsync(`models/${meta.ntex}`); nMap.flipY = false; nMap.colorSpace = THREE.NoColorSpace; } catch (e) { nMap = null; }
   }
   for (const k of ['walk', 'run', 'punch', 'death', 'hit']) if (!meta.clips[k]) meta.clips[k] = meta.clips.walk || Object.values(meta.clips)[0]; // missing clips fall back to walking
-  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: !textured, map, roughness: textured ? .82 : .7, metalness: .05, side: opts.gore ? THREE.DoubleSide : THREE.FrontSide });
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: !textured, map, normalMap: nMap, roughness: textured ? .82 : .7, metalness: .05, side: opts.gore ? THREE.DoubleSide : THREE.FrontSide });
   mat.onBeforeCompile = sh => {
     sh.uniforms.vatTex = { value: tex };
     if (textured) {
@@ -555,7 +570,7 @@ vColor.rgb = iFx.y >= 0. ? mix(vColor.rgb, vec3(1., .82, .78), iFx.y) : mix(vCol
       #include <opaque_fragment>`);
   };
   // the shaders inline this model's texture layout, so models must not share a compiled program
-  const layoutKey = `vat-${meta.W}-${meta.rows}-${textured ? 'tex' : 'col'}`; mat.customProgramCacheKey = () => layoutKey;
+  const layoutKey = `vat-${meta.W}-${meta.rows}-${textured ? 'tex' : 'col'}${nMap ? '-nm' : ''}`; mat.customProgramCacheKey = () => layoutKey;
   const depthMat = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, side: opts.gore ? THREE.DoubleSide : THREE.FrontSide });
   depthMat.customProgramCacheKey = () => layoutKey;
   depthMat.onBeforeCompile = sh => {
@@ -583,7 +598,7 @@ if (((int(iFx.z + .5) >> int(aGroup + .5)) & 1) == 1) transformed = vec3(0.); //
     for (const v of idx) if (grp[v] === 1) headR = Math.max(headR, Math.hypot(h(vat[v * 4]) - parts[3], h(vat[v * 4 + 1]) - parts[4], h(vat[v * 4 + 2]) - parts[5]));
     if (!cs[1]) parts = null;
   }
-  return { meta, mesh, iAnim, iTint, iFx, clips: meta.clips, n: 0, parts, headR };
+  return { meta, mesh, iAnim, iTint, iFx, clips: meta.clips, n: 0, max, parts, headR, maps: [tex, nTex, map, nMap].filter(Boolean), depthMat };
 }
 // world position of body part g of zombie z as last drawn (null if the model has no part data)
 function partWorld(z, g, out) {
@@ -603,6 +618,7 @@ function setAnim(R, i, clip, t) {
   R.iAnim.setXYZ(i, c.start + fa, c.start + fb, p - fa);
 }
 function pushInst(R, x, y, z, yaw, scale, clip, t, tint, variant = 0, flash = 0, mask = 0, tilt = 0) {
+  if (R.max && R.n >= R.max) return;
   const i = R.n++;
   if (tilt) { _e.set(tilt, yaw, 0); _q.setFromEuler(_e); } else _q.setFromAxisAngle(Y_AXIS, yaw); _v.set(x, y, z); _sv.set(scale, scale, scale);
   R.mesh.setMatrixAt(i, _m.compose(_v, _q, _sv));
@@ -1417,10 +1433,15 @@ let state = 'menu', G = null;
 // res: share of damage shrugged off per cause (negative = weak spot); stomp: soldiers knocked out per stomp, relative
 const BOSSES = [
   { name: 'ROTFATHER', model: 'mutant', size: 1, hp: 1, spd: 1.25, stomp: 1, res: {}, tag: '' },
+  { name: 'THE BUTCHER', model: 'butcher', size: .95, hp: .95, spd: 1.9, stomp: 1, res: {}, tag: 'FAST, CARRIES A BLADE' },
   { name: 'MOTHER MAGGOT', model: 'zombiegirl', size: .78, hp: .75, spd: 2.3, stomp: .7, res: {}, tag: 'SMALL BUT FAST' },
+  { name: 'THE CRAWLER', model: 'crawler', size: .85, hp: .9, spd: 2.2, stomp: .9, res: { fire: -.3 }, tag: 'CRAWLS FAST, HATES FIRE' },
   { name: 'THE WARDEN', model: 'prisoner', size: .9, hp: .95, spd: 1.8, stomp: .9, res: { bullet: .2 }, tag: 'FAST, TOUGH SKIN' },
+  { name: 'THE FLAYED', model: 'skinless', size: 1.05, hp: 1.1, spd: 1.5, stomp: 1.1, res: { fire: -.3 }, tag: 'CLEAVER, NO SKIN: BURNS EASILY' },
   { name: 'THE PUMPKIN KING', model: 'pumpkinhulk', size: 1.2, hp: 1.3, spd: 1.1, stomp: 1.2, res: { fire: .6 }, tag: 'FIREPROOF' },
+  { name: 'THE AXEMAN', model: 'ghoul', size: 1.1, hp: 1.15, spd: 1.4, stomp: 1.15, res: { bullet: .15 }, tag: 'SWINGS A FIRE AXE' },
   { name: 'IRON GRUNT', model: 'wwzombie', size: 1.1, hp: 1.15, spd: 1.3, stomp: 1, res: { bullet: .4, fire: .2, blast: -.3 }, tag: 'ARMORED: ROCKETS HIT HARD' },
+  { name: 'THE ABOMINATION', model: 'abomination', size: 1.35, hp: 1.5, spd: .9, stomp: 1.4, res: { bullet: .2 }, tag: 'HUGE, THICK HIDE' },
   { name: 'GUTMOUTH', model: 'ch10', size: 1.3, hp: 1.45, spd: .95, stomp: 1.3, res: { bullet: .15 }, tag: 'HUGE' }
 ];
 const bossFor = L => BOSSES[(L - 1) % BOSSES.length];
@@ -2468,6 +2489,7 @@ function goMenu() {
 }
 async function startLevel() {
   ensureAudio();
+  if (ZLIST && (ZLIST.bosses || []).includes(bossFor(save.level).model) && !ZBYNAME[bossFor(save.level).model]) { const b = $('playBtn'), t = b.textContent; b.textContent = 'LOADING BOSS…'; b.disabled = true; try { await readyBoss(save.level); } finally { b.textContent = t; b.disabled = false; } } else readyBoss(save.level);
   if (themeId !== themeFor(save.level)) { const b = $('playBtn'), t = b.textContent; b.textContent = 'LOADING MAP…'; b.disabled = true; try { await setTheme(themeFor(save.level), save.level); } finally { b.textContent = t; b.disabled = false; } } ['menu', 'pause', 'win', 'lose'].forEach(i => show(i, false)); show('hud', true); show('hint', true); $('hint').style.opacity = 1;
   $('bossbar').hidden = true; fpsReset(); for (const k in chipEls) chipEls[k].hidden = true;
   newGame(save.level); $('hudLv').textContent = 'LEVEL ' + save.level; lastCoins = -1; updateWeaponChip();
@@ -2507,6 +2529,7 @@ $('fpsBtn').onclick = $('fpsBtn2').onclick = () => { fpsOn = !fpsOn; store.set('
 $('goreBtn').onclick = $('goreBtn2').onclick = () => { goreOn = !goreOn; store.set('gore', goreOn); refreshSound(); if (!goreOn) { drops.length = 0; sprays.length = 0; gibs.length = 0; bloodDecals.clear(); } };
 // new game: tap twice to confirm (no browser dialogs); wipes level, coins, upgrades and retry backup, keeps settings
 let resetArm = 0;
+$('creditsBtn').onclick = () => { show('menu', false); show('credits', true); }; $('creditsClose').onclick = () => { show('credits', false); show('menu', true); };
 $('resetBtn').onclick = () => {
   const b = $('resetBtn');
   if (Date.now() - resetArm > 3000) { resetArm = Date.now(); b.textContent = 'TAP AGAIN: LOSE ALL PROGRESS'; setTimeout(() => { if (Date.now() - resetArm >= 3000) b.textContent = 'NEW GAME: START AT LEVEL 1'; }, 3100); return; }
@@ -2549,8 +2572,31 @@ async function loadTroops() { // realistic squad + hero from models/troops.json 
   } catch (e) { console.warn('troops', e); }
   return loadVAT('soldier', MAXS + MAXFALLEN);
 }
+// boss-only models (zombies.json "bosses") load when their level starts, so they cost no memory or download time until then
+let ZLIST = null; const lazyLoads = {};
+function loadBossModel(name) {
+  if (ZBYNAME[name] || !ZLIST || !(ZLIST.bosses || []).includes(name)) return Promise.resolve(ZBYNAME[name] || null);
+  return lazyLoads[name] || (lazyLoads[name] = loadVAT(name, 3, { gore: true }).then(R => {
+    R.scale = (ZLIST.scale && ZLIST.scale[name]) || (ZLIST.scale && ZLIST.scale.all) || 1; R.lazy = true; R.mesh.castShadow = hiQ;
+    ZBYNAME[name] = R; ZALL.push(R); return R;
+  }).catch(e => { console.warn('boss model', name, e); delete lazyLoads[name]; return null; }));
+}
+function dropBossModels(keep) { // free lazy boss models that aren't this level's or the next one's
+  for (const [n, R] of Object.entries(ZBYNAME)) if (R.lazy && !keep.includes(n) && !(G && G.boss && G.boss.model === R)) {
+    scene.remove(R.mesh); R.mesh.geometry.dispose(); R.mesh.material.dispose(); R.depthMat.dispose(); R.maps.forEach(t => t.dispose());
+    delete ZBYNAME[n]; delete lazyLoads[n]; ZALL = ZALL.filter(x => x !== R);
+  }
+}
+async function readyBoss(L) {
+  const cur = bossFor(L).model, next = bossFor(L + 1).model;
+  dropBossModels([cur, next]);
+  const R = await loadBossModel(cur);
+  if (R && R.lazy && !R.warm) { R.warm = true; try { R.mesh.count = 0; await renderer.compileAsync(scene, camera); } catch (e) {} } // build its shaders now, not mid-fight
+  loadBossModel(next); // fetch the next level's boss in the background
+}
 async function loadZombieModels() {
   let list; try { list = await (await fetch('models/zombies.json')).json(); } catch (e) { return null; }
+  ZLIST = list;
   const names = [...new Set([...(list.walker || []), ...(list.brute || []), ...(list.boss || [])])], byName = {};
   await Promise.all(names.map(n => loadVAT(n, MAXZ, { gore: true }).then(R => { byName[n] = R; }).catch(e => console.warn('zombie model', n, e))));
   for (const t of ['walker', 'brute', 'boss']) ZMODELS[t] = (list[t] || []).map(n => byName[n]).filter(Boolean);

@@ -19,14 +19,18 @@ MAX_TRIS = int(os.environ.get('MAX_TRIS', 6000))
 TEX = int(os.environ.get('TEX', 1024))
 GUNS = os.environ.get('GUNS')  # guns.json (tools/bake/guns.json): put the game's weapons in the character's hands
 GUN_SCALE = float(os.environ.get('GUN_SCALE', .75))
+MELEE = os.environ.get('MELEE')  # melee-<name>.json (tools/bake/melee.py): a weapon gripped in the right hand, pointing along the forearm
+if MELEE: GUNS = MELEE
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 scn = bpy.context.scene
 
-def bone_key(name):  # 'mixamorig5:LeftArm' -> 'LeftArm'
-    return name.split(':')[-1]
+def bone_key(name):  # 'mixamorig5:LeftArm' -> 'LeftArm', 'mixamorig:Hips_65' (Sketchfab glTF) -> 'Hips'
+    return re.sub(r'_\d+$', '', name.split(':')[-1])
 
-bpy.ops.import_scene.fbx(filepath=SRC, use_anim=False)
+# SRC is a Mixamo FBX, or a .blend from tools/bake/rig_sketchfab.py whose clips are already retargeted actions (spec 'walk=@walk')
+if SRC.endswith('.blend'): bpy.ops.wm.open_mainfile(filepath=SRC); scn = bpy.context.scene
+else: bpy.ops.import_scene.fbx(filepath=SRC, use_anim=False)
 arm = next(o for o in bpy.data.objects if o.type == 'ARMATURE')
 meshes = [o for o in bpy.data.objects if o.type == 'MESH' and o.find_armature() == arm]
 for o in list(bpy.data.objects):
@@ -58,6 +62,9 @@ for spec in SPECS:
     for p in parts[1:]:
         if p == 'once': opt['once'] = True
         elif '=' in p: k, v = p.split('='); opt[k] = float(v)
+    if path.startswith('@'):  # an action already on this armature
+        act = bpy.data.actions[path[1:]]; f0, f1 = act['f0'], act['f1']; fps_src = 30
+        clips.append(dict(name=name, act=act, f0=f0, f1=f1, fps=fps_src, dur=(f1 - f0) / fps_src, **opt)); continue
     before = set(bpy.data.objects); acts_before = set(bpy.data.actions)
     bpy.ops.import_scene.fbx(filepath=path)
     fps_src = scn.render.fps / scn.render.fps_base
@@ -98,6 +105,12 @@ def color_image(mat):
             if inp.is_linked and inp.links[0].from_node.type == 'TEX_IMAGE': return inp.links[0].from_node.image
     imgs = [n.image for n in mat.node_tree.nodes if n.type == 'TEX_IMAGE' and n.image and 'iffuse' in n.image.filepath]
     return imgs[0] if imgs else None
+def normal_image(mat):
+    if not mat or not mat.use_nodes: return None
+    for n in mat.node_tree.nodes:
+        if n.type == 'NORMAL_MAP' and n.inputs['Color'].is_linked and n.inputs['Color'].links[0].from_node.type == 'TEX_IMAGE':
+            return n.inputs['Color'].links[0].from_node.image
+    return None
 # one atlas tile per distinct colour image
 tiles, tile_of = [], {}
 for m in mats:
@@ -201,6 +214,8 @@ for c in clips:
         P[:, 0] -= cx; P[:, 2] -= cz; P[:, 1] -= lo[1]; P /= H
         if guns:  # the gun rides rigidly in the right hand, placed from the clip's first frame
             hp, hr = bone_frame('RightHand', d)
+            if gun_off is None and MELEE:  # fixed in the hand: weapon -z along the hand bone, +y along the bone's z
+                gun_off = (np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], np.float32), np.array([0, .035, 0], np.float32))
             if gun_off is None:
                 gp_, gr_ = gun_pose(d); gun_off = (hr.T @ gr_, hr.T @ (gp_ - hp))
             gr = hr @ gun_off[0]; gpos = hp + hr @ gun_off[1]
@@ -223,9 +238,24 @@ for t, im in enumerate(tiles):
     im2 = im.copy(); im2.scale(TEX, TEX)
     px = np.array(im2.pixels[:], np.float32).reshape(TEX, TEX, 4)
     atlas[:, t * TEX:(t + 1) * TEX] = px; bpy.data.images.remove(im2)
-out_img = bpy.data.images.new('atlas', TEX * NT, TEX, alpha=False)
-out_img.pixels = atlas.ravel()
-out_img.filepath_raw = OUT + '.jpg'; out_img.file_format = 'JPEG'; scn.render.image_settings.quality = 88; out_img.save()
+from PIL import Image as PILImage
+FMT = os.environ.get('FMT', 'jpg')  # jpg, or webp (smaller at the same quality)
+def save_atlas(arr, path, q):
+    im = PILImage.fromarray((np.clip(arr[::-1, :, :3], 0, 1) * 255 + .5).astype(np.uint8))
+    im.save(path, quality=q, method=6) if path.endswith('.webp') else im.save(path, quality=q)
+save_atlas(atlas, OUT + '.' + FMT, 88 if FMT == 'jpg' else 82)
+# tangent-space normal maps, in the same atlas layout (flat where a material has none); the game reads them per pixel
+ntile = {}
+for m in mats:
+    ci, ni = color_image(m), normal_image(m)
+    if ni is not None: ntile[tile_of.get(ci.name if ci else None, 0)] = ni
+NORMALS = bool(ntile) and os.environ.get('NORMALS', '1') == '1'
+if NORMALS:
+    natlas = np.zeros((TEX, TEX * NT, 4), np.float32); natlas[..., 0] = natlas[..., 1] = .5; natlas[..., 2] = 1
+    for t, im in ntile.items():
+        im.colorspace_settings.name = 'Non-Color'; im2 = im.copy(); im2.scale(TEX, TEX)
+        natlas[:, t * TEX:(t + 1) * TEX] = np.array(im2.pixels[:], np.float32).reshape(TEX, TEX, 4); bpy.data.images.remove(im2)
+    save_atlas(natlas, OUT + '-n.' + FMT, 90)
 atlas_flip = atlas[::-1]  # row 0 = top, to sample with (u, 1 - v) after our flip
 
 def sample(uv):
@@ -252,6 +282,7 @@ buf, offs = b'', {}
 for k, b in blobs:
     buf += b'\0' * (-len(buf) % 8); offs[k] = len(buf); buf += b
 open(OUT + '.bin', 'wb').write(buf)
-meta = {'V': V, 'W': W, 'rows': rows, 'fps': FPS, 'frames': F, 'indexCount': int(len(IDX)), 'clips': meta_clips, 'gunBase': VB, 'offs': offs, 'tex': os.path.basename(OUT) + '.jpg', 'height': float(H)}
+meta = {'V': V, 'W': W, 'rows': rows, 'fps': FPS, 'frames': F, 'indexCount': int(len(IDX)), 'clips': meta_clips, 'gunBase': VB, 'offs': offs, 'tex': os.path.basename(OUT) + '.' + FMT, 'height': float(H)}
+if NORMALS: meta['ntex'] = os.path.basename(OUT) + '-n.' + FMT
 json.dump(meta, open(OUT + '.json', 'w'))
 print('BAKED', os.path.basename(OUT), V, 'verts', len(IDX) // 3, 'tris', F, 'frames', round(len(buf) / 1e6, 2), 'MB', NT, 'texture tiles', list(meta_clips))
