@@ -140,6 +140,7 @@ h2{font-family:var(--display);font-size:clamp(30px,9vw,40px);margin:0;color:var(
     <div class="credlist">
       <p><b>Boss and zombie models</b> from Sketchfab, used under the Sketchfab Standard license:</p>
       <p>The Butcher: "Horror Maniac with Knife" by loundzzz<br>The Crawler: "Scary Monster" by L. (A2555)<br>The Flayed: "Undead" by Regulator<br>The Axeman: "Zombie" by David Glynch<br>The Abomination: "Mutant Monster" by raydev<br>Punk and Clerk zombies: "spiky haired male zombie" and "male office worker zombie character" by PJ8080!<br>Lurker zombie: "Zombie" by L. (A2555)<br>The Mutagen: "William Birkin Stage" by Vasian-Digital3D (fan model)</p>
+      <p><b>Boss arena:</b> "old factory FREE" by dasy444 (Sketchfab Standard license)</p>
       <p>Squad and other zombies: Mixamo characters and animations, and Quaternius (CC0). Scenery: Quaternius (CC0). Sounds: CC0 recordings, see audio/CREDITS.md.</p>
     </div>
     <button class="btn" id="creditsClose">BACK</button>
@@ -1406,7 +1407,8 @@ const roadMats = {};
 async function roadMat(kind) {
   if (roadMats[kind]) return roadMats[kind];
   const S = await surface('road-' + kind), fb = ROADS[kind]; fb.repeat.set(1, ROAD_LEN / 12);
-  return roadMats[kind] ||= terrainMat(S, 1, ROAD_LEN / 18, { puddles: true, macro: .12, fallback: fb });
+  const m = roadMats[kind] ||= terrainMat(S, 1, ROAD_LEN / 18, { puddles: true, macro: .12, fallback: fb });
+  m.clippingPlanes = [ARENA_CLIP]; return m; // the road ends at the factory door
 }
 const along = (step, fn, z0 = ROAD_Z0 + 20) => { const l = []; for (let z = z0; z > Z_MIN; z -= step) fn(z, l); return l; };
 const dens = () => hiQ ? 1 : .6;
@@ -1518,7 +1520,7 @@ let themeId = null;
 ensureTheme('bridge'); // builds the shared road too
 const themeFor = L => save.map && save.map !== 'auto' && THEMES[save.map] ? save.map : THEME_ORDER[(L - 1) % THEME_ORDER.length];
 async function ensureTheme(id) {
-  if (!themeGroups[id]) { const grp = new THREE.Group(); grp.visible = false; scene.add(grp); themeGroups[id] = (async () => { await THEMES[id].build(grp); await roadMat(THEMES[id].road); return grp; })(); }
+  if (!themeGroups[id]) { const grp = new THREE.Group(); grp.visible = false; scene.add(grp); themeGroups[id] = (async () => { await THEMES[id].build(grp); arenaClipStrips(grp); await roadMat(THEMES[id].road); return grp; })(); }
   return themeGroups[id];
 }
 async function setTheme(id, L = 1) {
@@ -1561,6 +1563,8 @@ function applyMood(T, M) {
   const near = T.fog[1] * (1 - .8 * f), far = Math.max(48, T.fog[2] * (1 - .62 * f));
   scene.fog.near = near; scene.fog.far = far;
   for (const P of [fireFx, smokeFx, flameFx]) { P.mesh.material.uniforms.fogNear.value = near; P.mesh.material.uniforms.fogFar.value = far; }
+  { const su = shaftMat.uniforms; su.fogNear.value = near; su.fogFar.value = far; su.col.value.set(T.sun[0]).lerp(_c2.set('#8fa6ff'), d); su.amt.value = (.22 + .12 * f) * (1 - .55 * d); // skylight shafts in the factory
+    ARENA_U.aWet.value = T.wet ? .55 + .45 * T.wet : .12; }
   camera.far = far + 8; camera.updateProjectionMatrix(); sky.scale.setScalar(camera.far * .9 / 500);
   mood.hemi = T.hemi[2] * (1 - .5 * d); hemi.intensity = mood.hemi;
   sun.intensity = T.sun[1] * (1 - .78 * d);
@@ -1598,8 +1602,8 @@ rainGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-.5
 rainGeo.setAttribute('seed', new THREE.InstancedBufferAttribute(Float32Array.from({ length: RAIN_N * 4 }, Math.random), 4)); rainGeo.instanceCount = RAIN_N;
 const rain = new THREE.Mesh(rainGeo, new THREE.ShaderMaterial({
   transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false,
-  uniforms: { t: { value: 0 }, cam: { value: new THREE.Vector3() }, amt: { value: 0 }, lightPos: { value: new THREE.Vector3() }, lightAmt: { value: 0 }, col: { value: new THREE.Color('#9fb0c8') } },
-  vertexShader: `uniform float t, amt, lightAmt; uniform vec3 cam, lightPos; attribute vec4 seed; varying float vA, vU;
+  uniforms: { t: { value: 0 }, cam: { value: new THREE.Vector3() }, amt: { value: 0 }, lightPos: { value: new THREE.Vector3() }, lightAmt: { value: 0 }, col: { value: new THREE.Color('#9fb0c8') }, door: { value: 1e5 } },
+  vertexShader: `uniform float t, amt, lightAmt, door; uniform vec3 cam, lightPos; attribute vec4 seed; varying float vA, vU;
     void main() {
       vec3 box = vec3(26., 16., 34.), lo = cam - vec3(13., 14.5, 30.);
       vec3 vel = vec3(-1.2, -(13. + seed.w * 5.), -.6);
@@ -1609,7 +1613,7 @@ const rain = new THREE.Mesh(rainGeo, new THREE.ShaderMaterial({
       vec3 q = mix(p0, p1, position.y); q.xy += side * position.x * .02 * -q.z / 6.;
       gl_Position = projectionMatrix * vec4(q, 1.);
       float near = smoothstep(.6, 2.5, -p0.z) * (1. - smoothstep(18., 30., -p0.z));
-      vA = amt * near * (.4 + 1.6 * lightAmt * exp(-dot(p - lightPos, p - lightPos) / 90.)) * step(seed.w, amt); vU = position.x;
+      vA = amt * near * (.4 + 1.6 * lightAmt * exp(-dot(p - lightPos, p - lightPos) / 90.)) * step(seed.w, amt) * (1. - step(p.z, door) * step(abs(p.x), 13.)); vU = position.x; // none inside the factory hall
     }`,
   fragmentShader: `uniform vec3 col; varying float vA, vU; void main() { gl_FragColor = vec4(col * vA * (1. - 4. * vU * vU), 1.); }`
 }));
@@ -1655,10 +1659,155 @@ const torchBeam = new THREE.Mesh(torchBeamGeo, new THREE.ShaderMaterial({
       gl_FragColor = vec4(col * amt * edge * dust * (1. - vL) * (1. - vL) * smoothstep(0., .06, vL) * .5, 1.); }`
 }));
 torchBeam.frustumCulled = false; torchBeam.renderOrder = 4; torchBeam.visible = false; scene.add(torchBeam);
+/* ================= boss arena: an old factory at the end of every level ================= */
+// "old factory FREE" by dasy444 (Sketchfab, Standard licence), decimated and re-centred in Blender (tools/scenery/factory.py): origin at
+// the middle of its open end, floor at 0, the hall running away down -z; one model unit is 3 m here. The squad stops 22 m short of
+// the door and the boss spawns 8 m inside, so it walks out of the dark hall at them. Road-side strips (the road, rails, kerbs,
+// the bridge deck) are clipped at the door, and scenery standing where the factory goes is hidden for that level.
+renderer.localClippingEnabled = true;
+const ARENA_S = 3, ARENA_GAP = 22;
+const ARENA_CLIP = new THREE.Plane(new THREE.Vector3(0, 0, 1), 1e5);
+const ARENA_U = { aLamp: { value: [0, 1, 2, 3, 4].map(() => new THREE.Vector3(0, -99, 0)) }, aLampC: { value: [0, 1, 2, 3, 4].map(() => new THREE.Vector3()) }, aTube: { value: new THREE.Vector4(1, 1, 1, 1) }, aWet: { value: .5 } };
+// four rows of ceiling tubes and a red emergency light at the back, in model units
+const ARENA_LAMPS = [[.14, 4.2, -3.48], [.14, 4.2, -10.45], [.14, 4.2, -17.42], [.14, 4.2, -24.46], [0, 2.3, -29.2]];
+const ARENA_SURF = { // roughness, metalness per material (the model's own values made the concrete glossy)
+  'Material.002': [.86, 0], 'Material.001': [.9, 0], 'Material.007': [.88, 0], 'Material.003': [.5, .7], 'Material.006': [.5, .6],
+  'Material.005': [.55, .5], 'Material.004': [.6, .3], 'Material.008': [.55, .35], 'Material.009': [.55, .35], 'Material.010': [.55, .35] };
+const arena = { root: null, z: 1e5, hidden: [], pier: null, load: null, meshes: [], shafts: null, ready: null };
+const ARENA_GLSL = `varying vec3 vLP, vWP; uniform vec3 aLamp[5], aLampC[5]; uniform vec4 aTube; uniform float aWet;
+float ah(vec2 p) { vec3 q = fract(vec3(p.xyx) * .1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
+float an(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f);
+  return mix(mix(ah(i), ah(i + vec2(1., 0.)), f.x), mix(ah(i + vec2(0., 1.)), ah(i + vec2(1., 1.)), f.x), f.y); }\n`;
+function arenaMat(m) {
+  const s = ARENA_SURF[m.name]; if (s) { m.roughness = s[0]; m.metalness = s[1]; }
+  for (const k of ['map', 'normalMap']) if (m[k]) m[k].anisotropy = maxAniso;
+  const tube = m.emissiveIntensity > 1 && !m.map; // the ceiling tubes
+  if (tube) { m.defines = { ARENA_TUBE: '' }; m.emissiveIntensity = 6; }
+  m.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, ARENA_U);
+    sh.vertexShader = 'varying vec3 vLP, vWP;\n' + sh.vertexShader
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLP = position;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\nvWP = (modelMatrix * vec4(transformed, 1.)).xyz;');
+    const lights = THREE.ShaderChunk.lights_fragment_begin
+      .replace('getDirectionalLightInfo( directionalLight, directLight );', 'getDirectionalLightInfo( directionalLight, directLight ); directLight.color *= aDirK;')
+      .replace('irradiance += getHemisphereLightIrradiance( hemisphereLights[ i ], geometryNormal );', 'irradiance += getHemisphereLightIrradiance( hemisphereLights[ i ], geometryNormal ) * aAmbK;');
+    sh.fragmentShader = ARENA_GLSL + sh.fragmentShader
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        vec3 aWN = inverseTransformDirection(normal, viewMatrix), aP = vLP;
+        // inside the hall (lamp-lit) unless the face looks out through a wall, the roof, the back or the open front
+        float aBox = (1. - smoothstep(4.3, 4.45, abs(aP.x))) * (1. - smoothstep(4.78, 4.9, aP.y)) * (1. - smoothstep(.3, .45, aP.z));
+        float aOut = max(max(step(4., abs(aP.x)) * step(.5, aWN.x * sign(aP.x)), step(4.55, aP.y) * step(.5, aWN.y)), max(step(30.4, -aP.z) * step(.5, -aWN.z), step(-.5, aP.z) * step(.5, aWN.z)));
+        float aHall = aBox * (1. - aOut), aIn = aHall * smoothstep(-.3, -4.5, aP.z); // daylight fades over the first dozen metres in
+        float aDirK = 1. - .94 * aIn, aAmbK = 1. - .7 * aIn;
+        float aN = an(vWP.xz * .4 + vWP.y * .3) * .6 + an(vWP.xz * 1.7 + vWP.y) * .4;
+        diffuseColor.rgb *= mix(.5, 1., smoothstep(0., .9, aP.y)) * (.8 + .32 * aN); // grime along the bottom of the walls, stains
+        float aPud = step(.8, aWN.y) * (1. - step(.15, aP.y)) * smoothstep(.5, .58, an(vWP.xz * .16) * .65 + an(vWP.xz * .8) * .35) * aWet; // rain through the broken roof pools on the floor
+        diffuseColor.rgb *= 1. - .5 * aPud; roughnessFactor = mix(roughnessFactor, .05, aPud);`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        #ifdef ARENA_TUBE
+        { float r = clamp(floor((-vLP.z - 3.48) / 6.97 + .5), 0., 3.), c = floor((vLP.x + 2.25) / 2.38 + .5);
+          float li = r < .5 ? aTube.x : r < 1.5 ? aTube.y : r < 2.5 ? aTube.z : aTube.w;
+          totalEmissiveRadiance *= li * step(.2, ah(vec2(r, c) + 3.7)); } // a few tubes are dead
+        #endif`)
+      .replace('#include <lights_fragment_begin>', lights + `
+        #if defined( RE_Direct )
+        for (int k = 0; k < 5; k++) { // the hall's own lamps (lighting only its inside)
+          vec3 lv = (viewMatrix * vec4(aLamp[k], 1.)).xyz - geometryPosition; float ld = length(lv);
+          directLight.direction = lv / ld; directLight.color = aLampC[k] * (getDistanceAttenuation(ld, 48., 2.) * aHall); directLight.visible = true;
+          RE_Direct( directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );
+        }
+        #endif`)
+      .replace('#include <lights_fragment_maps>', `#include <lights_fragment_maps>
+        #if defined( RE_IndirectDiffuse )
+        iblIrradiance *= aAmbK;
+        #endif
+        #if defined( RE_IndirectSpecular )
+        radiance *= aAmbK;
+        #endif`);
+  };
+  m.customProgramCacheKey = () => 'arena' + (tube ? 'T' : '');
+}
+// dusty daylight falling through the broken skylights
+const shaftMat = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, toneMapped: false,
+  uniforms: { amt: { value: 0 }, col: { value: new THREE.Color() }, t: UTIME, cam: { value: new THREE.Vector3() }, fogNear: { value: 20 }, fogFar: { value: 120 } },
+  vertexShader: `varying float vL; varying vec3 vN, vV, vW;
+    void main() { vL = position.y + .5; mat4 m = modelMatrix * instanceMatrix; vec4 w = m * vec4(position, 1.); vW = w.xyz; vec4 mv = viewMatrix * w;
+      vV = normalize(-mv.xyz); vN = normalize(mat3(viewMatrix) * mat3(m) * vec3(normal.x, 0., normal.z)); gl_Position = projectionMatrix * mv; }`,
+  fragmentShader: `uniform float amt, t, fogNear, fogFar; uniform vec3 col, cam; varying float vL; varying vec3 vN, vV, vW;
+    void main() { float edge = pow(abs(dot(normalize(vN), normalize(vV))), 2.2);
+      float dust = .65 + .35 * sin(vW.y * 1.9 + t * .5) * sin(vW.x * 1.3 + vW.z * .7 - t * .35);
+      float fog = 1. - smoothstep(fogNear, fogFar, distance(vW, cam));
+      gl_FragColor = vec4(col * amt * edge * dust * fog * smoothstep(0., .3, vL) * smoothstep(1., .85, vL), 1.); }`
+});
+function loadArena() {
+  return arena.load ||= new Promise(res => new GLTFLoader().load('scenery/factory.glb', g => {
+    const fac = g.scene; fac.scale.setScalar(ARENA_S);
+    fac.traverse(o => { if (!o.isMesh) return; o.castShadow = hiQ; o.receiveShadow = true; arenaMat(o.material); arena.meshes.push(o); });
+    const root = new THREE.Group(); root.add(fac);
+    // on the bridge the factory stands on a concrete pier rising out of the water
+    const pier = new THREE.Group(), body = new THREE.Mesh(new THREE.BoxGeometry(72, 34, 106), std('#6e6c6a', { roughness: .92 }));
+    body.position.set(-2, -17.08, -51); pier.add(body);
+    surface('concrete').then(S => { const top = new THREE.Mesh(new THREE.PlaneGeometry(72, 106).rotateX(-Math.PI / 2), terrainMat(S, 12, 18, { puddles: true, macro: .2, fallback: GROUND.concrete }));
+      top.position.set(-2, -.06, -51); top.receiveShadow = true; pier.add(top); });
+    pier.visible = false; root.add(pier); arena.pier = pier;
+    const sg = new THREE.CylinderGeometry(1, 1, 1, 14, 1, true), sh = new THREE.InstancedMesh(sg, shaftMat, 7); // shafts lean along the sun (it shines from ahead, up and to the right)
+    const dir = new THREE.Vector3(-9, -24, 11).normalize(), q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, -1, 0), dir), len = 13.4 / -dir.y;
+    for (let i = 0; i < 7; i++) { const top = new THREE.Vector3(rand(-8, 8), 13.6, -14 - i * 10.5 + rand(-3, 3)), w = rand(1.1, 2.2);
+      sh.setMatrixAt(i, _m.compose(top.addScaledVector(dir, len / 2), q, _sv.set(w, len, w * rand(.8, 1.6)))); }
+    sh.frustumCulled = false; sh.renderOrder = 4; root.add(sh); arena.shafts = sh;
+    scene.add(root); arena.root = root; root.visible = false; res(root);
+  }, undefined, () => res(null)));
+}
+// scenery instances that stand inside the factory's footprint are parked (zero matrix) for the level, and put back on the next one
+const _as = new THREE.Sphere();
+function arenaHide(grp, z0) {
+  for (const h of arena.hidden) { h.im.instanceMatrix.array.set(h.m, h.i * 16); h.im.instanceMatrix.needsUpdate = true; }
+  arena.hidden.length = 0;
+  const x0 = -11.5 * ARENA_S, x1 = 10.1 * ARENA_S, zA = z0 - 32.6 * ARENA_S, zB = z0 + 2;
+  grp.traverse(o => {
+    if (!o.isInstancedMesh) return;
+    if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+    const bs = o.geometry.boundingSphere, a = o.instanceMatrix.array; let any = false;
+    for (let i = 0; i < o.count; i++) {
+      _m.fromArray(a, i * 16); _as.copy(bs).applyMatrix4(_m); const c = _as.center, r = _as.radius;
+      if (r > 0 && c.x + r > x0 && c.x - r < x1 && c.z + r > zA && c.z - r < zB) { arena.hidden.push({ im: o, i, m: a.slice(i * 16, i * 16 + 16) }); a.fill(0, i * 16, i * 16 + 16); any = true; }
+    }
+    if (any) o.instanceMatrix.needsUpdate = true;
+  });
+}
+// long strips running beside the road stop at the door (their materials share one clipping plane)
+function arenaClipStrips(grp) {
+  grp.traverse(o => {
+    if (!o.isMesh || o.isInstancedMesh) return;
+    if (!o.geometry.boundingBox) o.geometry.computeBoundingBox(); const b = o.geometry.boundingBox;
+    if ((b.max.z - b.min.z) * o.scale.z > 400 && (b.max.x - b.min.x) * o.scale.x < 40) for (const m of [].concat(o.material)) { m.clippingPlanes = [ARENA_CLIP]; m.clipShadows = true; }
+  });
+}
+async function placeArena(g) {
+  const id = themeFor(g.L), [root, grp] = await Promise.all([loadArena(), ensureTheme(id)]);
+  if (G !== g || !root) return;
+  const z0 = -g.len - ARENA_GAP; arena.z = z0;
+  root.position.set(0, .04, z0); root.visible = true; root.updateMatrixWorld(true);
+  ARENA_CLIP.constant = -z0;
+  arenaHide(grp, z0); arena.pier.visible = id === 'bridge';
+  ARENA_LAMPS.forEach((p, k) => ARENA_U.aLamp.value[k].set(p[0] * ARENA_S, p[1] * ARENA_S + .04, z0 + p[2] * ARENA_S));
+}
+const ARENA_FLUO = new THREE.Color('#d6ecde'), ARENA_RED = new THREE.Color('#ff2a12');
+function updateArena(t) {
+  if (!arena.root || !arena.root.visible) return;
+  // one row of tubes buzzes and drops out; the red light at the back pulses
+  const buzz = (Math.sin(t * 31) > -.3 && (t % 4.7) > .5) ? 1 : (t % .23 < .11 ? .1 : .55), lamp = 110, U = ARENA_U;
+  const rows = [1, buzz, .85, 0];
+  for (let k = 0; k < 4; k++) U.aLampC.value[k].set(ARENA_FLUO.r, ARENA_FLUO.g, ARENA_FLUO.b).multiplyScalar(lamp * rows[k]);
+  U.aLampC.value[4].set(ARENA_RED.r, ARENA_RED.g, ARENA_RED.b).multiplyScalar(26 * (.35 + .65 * Math.pow(.5 + .5 * Math.sin(t * 2.4), 3)));
+  U.aTube.value.set(rows[0], rows[1], rows[2], rows[3]);
+  shaftMat.uniforms.cam.value.copy(camera.position);
+}
 function updateAtmos(dt, t) {
   UTIME.value = t; sky.material.uniforms.time.value = t;
   const ru = rain.material.uniforms, mu = motes.material.uniforms; ru.t.value = mu.t.value = torchBeam.material.uniforms.t.value = t;
-  ru.cam.value.copy(camera.position); mu.cam.value.copy(camera.position); mu.px.value = renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+  ru.cam.value.copy(camera.position); ru.door.value = arena.z; mu.cam.value.copy(camera.position); updateArena(t); mu.px.value = renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
   camera.getWorldDirection(_cd); camFill.position.copy(camera.position).addScaledVector(_cd, -4).y += 6; camFill.target.position.copy(camera.position).addScaledVector(_cd, 20);
   if (!G) return;
   ru.lightPos.value.copy(torch.position).lerp(torch.target.position, .3); ru.lightAmt.value = torch.intensity / 150;
@@ -1861,6 +2010,7 @@ function newGame(L, preview = false) {
   G.help = preview ? 0 : Math.min(3, save.fails[L] || 0); G.backup = G.help * (2 + Math.ceil(L / 2));
   for (let i = 0; i < st.men + G.backup; i++) addSoldier(true);
   layoutSquad(true);
+  arena.ready = placeArena(G);
   if (!preview) genLevel(L);
   else for (let i = 0; i < 40; i++) G.zombies.push(makeZombie(rand(-3.6, 3.6), -26 - rand(0, 14), 'walker'));
   debris.length = 0; sparks.clear(); flashes.clear(); muzzle.clear(); fireFx.clear(); smokeFx.clear(); flameFx.clear(); groundFires.length = 0; boomLightT = 0; boomLight.intensity = 0; bloodDecals.clear(); scorchDecals.clear(); gibs.length = 0; drops.length = 0; sprays.length = 0;
@@ -2970,7 +3120,7 @@ function refreshSound() { const t = 'SOUND: ' + (soundOn ? 'ON' : 'OFF'); $('sou
   const f = 'BOSS: ' + (fpsOn ? '1ST PERSON' : 'CLASSIC'); $('fpsBtn').textContent = f; $('fpsBtn2').textContent = f; }
 function setQuality(q) { // see GFX_TIERS; LOW also drops character shadows and uses a smaller shadow map
   gfx = q; hiQ = q !== 'low'; store.set('gfx', q);
-  if (SOLD) SOLD.mesh.castShadow = hiQ; if (HEROM) HEROM.mesh.castShadow = hiQ; if (ZOMB) ZOMB.mesh.castShadow = hiQ; for (const R of ZALL) R.mesh.castShadow = hiQ; for (const m of gibMeshes) if (m) m.mesh.castShadow = hiQ;
+  if (SOLD) SOLD.mesh.castShadow = hiQ; if (HEROM) HEROM.mesh.castShadow = hiQ; if (ZOMB) ZOMB.mesh.castShadow = hiQ; for (const R of ZALL) R.mesh.castShadow = hiQ; for (const m of gibMeshes) if (m) m.mesh.castShadow = hiQ; for (const m of arena.meshes) m.castShadow = hiQ;
   const sm = hiQ ? 2048 : 1024; sun.shadow.mapSize.set(sm, sm); if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
   resize(); refreshSound();
 }
@@ -3113,7 +3263,7 @@ async function loadZombieModels() {
 Promise.all([document.fonts ? document.fonts.load('40px Bungee').catch(() => {}) : 0, loadTroops(), loadVAT('zombie', MAXZ, { gore: true }), fetch('models/zombie-gibs.json').then(r => r.json()), loadZombieModels()]).then(([, s, z, gibData, texGibs]) => {
   SOLD = s; ZOMB = z; buildGibs(texGibs || gibData); $('playBtn').disabled = false; if (BOSS_TEST) save.level = BOSS_TEST; goMenu(); fpsPrewarm(); requestAnimationFrame(frame);
 }).catch(err => { $('playBtn').textContent = 'COULD NOT LOAD MODELS'; console.error(err); });
-window.__dt = { post, renderer, scene, setQuality, WET, RAIN, addWound, get gfx() { return gfx; }, info: (hide) => { const g = []; if (hide) scene.traverse(o => { if (o.isInstancedMesh && o !== SOLD.mesh && !(HEROM && o === HEROM.mesh) && o !== ZOMB.mesh && !ZALL.some(R => R.mesh === o) && o.visible) { o.visible = false; g.push(o); } }); renderer.setRenderTarget(post.rt); renderer.render(scene, camera); renderer.setRenderTarget(null); const r = { tris: renderer.info.render.triangles, calls: renderer.info.render.calls }; g.forEach(o => o.visible = true); return r; }, mk: (x, z, t = 'walker') => makeZombie(x, z, t), audio: () => ({ ctx: AC && AC.state, loaded: Object.keys(buffers).length, voices }), camera, THREE, get G() { return G; }, get state() { return state; }, start: startLevel, power: t => applyPower(t), setTheme, step(dt) { if (state === 'play') update(dt); }, tick(dt, draw) { if (state === 'play') update(dt); sync(state === 'paused' ? 0 : dt); updateHud(); updateFloats(state === 'paused' ? 0 : dt); if (draw) renderFrame(); }, get gore() { return goreOn; }, sync, render: () => renderFrame(), save, persist, programs: () => renderer.info.programs.length, headAt: z => partWorld(z, 1, new THREE.Vector3()), torsoAt: z => partWorld(z, 0, new THREE.Vector3()) };
+window.__dt = { post, renderer, scene, setQuality, arena, arenaReady: () => arena.ready, WET, RAIN, addWound, get gfx() { return gfx; }, info: (hide) => { const g = []; if (hide) scene.traverse(o => { if (o.isInstancedMesh && o !== SOLD.mesh && !(HEROM && o === HEROM.mesh) && o !== ZOMB.mesh && !ZALL.some(R => R.mesh === o) && o.visible) { o.visible = false; g.push(o); } }); renderer.setRenderTarget(post.rt); renderer.render(scene, camera); renderer.setRenderTarget(null); const r = { tris: renderer.info.render.triangles, calls: renderer.info.render.calls }; g.forEach(o => o.visible = true); return r; }, mk: (x, z, t = 'walker') => makeZombie(x, z, t), audio: () => ({ ctx: AC && AC.state, loaded: Object.keys(buffers).length, voices }), camera, THREE, get G() { return G; }, get state() { return state; }, start: startLevel, power: t => applyPower(t), setTheme, step(dt) { if (state === 'play') update(dt); }, tick(dt, draw) { if (state === 'play') update(dt); sync(state === 'paused' ? 0 : dt); updateHud(); updateFloats(state === 'paused' ? 0 : dt); if (draw) renderFrame(); }, get gore() { return goreOn; }, sync, render: () => renderFrame(), save, persist, programs: () => renderer.info.programs.length, headAt: z => partWorld(z, 1, new THREE.Vector3()), torsoAt: z => partWorld(z, 0, new THREE.Vector3()) };
 </script>
 </body>
 </html>
