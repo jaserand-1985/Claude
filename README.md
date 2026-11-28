@@ -11,6 +11,7 @@ A 3D zombie lane shooter for Android phones. Your squad charges down a road thro
 - **Boss:** at the end of every level your squad stops and the boss walks in. Its stomps knock out soldiers, so kill it fast.
 - **First-person boss fight:** as the boss walks in, the camera drops into your squad leader's eyes and you hold the minigun. Drag anywhere to aim (on a computer, drag with the mouse or use WASD / arrow keys); the minigun fires by itself at the crosshair. The head is the weak spot: headshots do 2.5× damage, and the crosshair turns red when you land one. The rest of the squad keeps shooting the boss on its own, so good aim shortens the fight and the boss gets fewer stomps in. A light aim assist pulls the crosshair onto the boss when it is already close. When the boss falls the camera pulls back out. **BOSS VIEW** in the menu and pause screen switches between FIRST PERSON (default) and the CLASSIC overhead view.
 - **Armory:** coins from kills, survivors and bosses buy permanent upgrades between levels.
+- **New game:** the game saves your level, coins and upgrades and picks up where you left off. **NEW GAME** at the bottom of the menu (tap it twice) starts again from level 1 with nothing.
 
 ### Maps
 
